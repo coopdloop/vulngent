@@ -75,12 +75,32 @@ def show(vuln_id: int) -> None:
 
 
 @app.command()
-def report() -> None:
-    """Print the current ledger status report."""
+def report(
+    format: str = typer.Option("md", "--format", "-f", help="Output format: md, txt, pdf, or docx."),
+    output: str = typer.Option(None, "--output", "-o", help="File path to write the report to (required for pdf/docx)."),
+) -> None:
+    """Print or export the current ledger status report."""
     from vulngent.agents.tools import generate_status_report
+    from vulngent.reporting import SUPPORTED_FORMATS, render_report
+
+    fmt = format.lower()
+    if fmt not in SUPPORTED_FORMATS:
+        console.print(f"[red]Invalid format '{format}'. Must be one of {SUPPORTED_FORMATS}[/red]")
+        raise typer.Exit(1)
+    if fmt in ("pdf", "docx") and not output:
+        console.print(f"[red]--output PATH is required for --format {fmt}[/red]")
+        raise typer.Exit(1)
 
     init_db()
-    console.print(generate_status_report(), markup=False)
+    rendered = render_report(generate_status_report(), fmt)
+
+    if output:
+        mode = "wb" if isinstance(rendered, bytes) else "w"
+        with open(output, mode) as f:
+            f.write(rendered)
+        console.print(f"[green]Report written to {output}[/green]")
+    else:
+        console.print(rendered, markup=False)
 
 
 @app.command("run-cycle")
