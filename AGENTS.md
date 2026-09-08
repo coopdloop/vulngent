@@ -14,27 +14,30 @@ and is designed to be driven non-interactively by coding agents.
 
 **Do not run `git commit` directly in this repo.** Use `sc` instead:
 
+Note the installed CLI takes subcommands (`commit`, `push`) — `sc --help` /
+`sc commit --help` is authoritative if this ever drifts from the examples below.
+
 ```bash
 # Stage everything and commit, non-interactively
-sc --all --type <type> --subject "<subject>" --yes
+sc commit --all --type <type> --subject "<subject>" --yes
 
 # With a body and/or footer
-sc --all --type fix --subject "handle empty CSV import" \
+sc commit --all --type fix --subject "handle empty CSV import" \
    --body "Explain why, not what." \
    --footer "Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>" \
    --yes
 
 # Stage specific files only (comma-separated paths)
-sc --files vulngent/cli.py,tests/test_cli.py --type feat --subject "..." --yes
+sc commit --files vulngent/cli.py,tests/test_cli.py --type feat --subject "..." --yes
 
-# Preview without touching git
-sc --dry-run --all --type feat --subject "..."
+# Preview without touching git (staging still happens for real; the commit does not)
+sc commit --dry-run --all --type feat --subject "..."
 
 # Commit and push in one shot
-sc --all --type feat --subject "..." --push --yes
+sc commit --all --type feat --subject "..." --push --yes
 
 # Push only (no commit), optionally opening a PR
-super-commit push --create-pr --base main
+sc push --create-pr --base main
 ```
 
 Commit types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`, `ci`,
@@ -46,7 +49,7 @@ attribution (a `Co-Authored-By:` trailer and/or a `Claude-Session:` link), pass 
 `--footer`, e.g.:
 
 ```bash
-sc --all --type feat --subject "add outreach follow-up tool" \
+sc commit --all --type feat --subject "add outreach follow-up tool" \
    --footer "Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01V5R2eGD7VsPPbo34dXZZmk" \
    --yes
