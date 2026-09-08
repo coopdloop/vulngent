@@ -1,0 +1,51 @@
+[
+  {
+    "external_id": "CVE-2026-30112",
+    "title": "SQL injection in /api/search endpoint",
+    "description": "Unsanitized query parameter passed directly into a raw SQL query, allowing injection.",
+    "severity": "critical",
+    "cvss_score": 9.8,
+    "asset_name": "billing-service",
+    "repo_full_name": "acme-corp/billing-service",
+    "asset_criticality": "critical",
+    "owner_name": "Priya Shah",
+    "owner_email": "priya@acme-corp.example",
+    "owner_slack_id": "U01PRIYA",
+    "owner_github_username": "priyashah"
+  },
+  {
+    "external_id": "CVE-2026-19042",
+    "title": "Outdated jackson-databind with known deserialization RCE",
+    "description": "Dependency scan flagged jackson-databind 2.9.8, vulnerable to polymorphic deserialization RCE.",
+    "severity": "high",
+    "cvss_score": 8.1,
+    "asset_name": "billing-service",
+    "repo_full_name": "acme-corp/billing-service",
+    "asset_criticality": "critical",
+    "owner_name": "Priya Shah",
+    "owner_email": "priya@acme-corp.example"
+  },
+  {
+    "external_id": "CVE-2026-04471",
+    "title": "Missing rate limiting on password reset endpoint",
+    "description": "Password reset endpoint has no rate limiting, enabling brute-force enumeration.",
+    "severity": "medium",
+    "cvss_score": 5.3,
+    "asset_name": "auth-gateway",
+    "repo_full_name": "acme-corp/auth-gateway",
+    "asset_criticality": "high",
+    "owner_name": "Devon Ruiz",
+    "owner_slack_id": "U02DEVON",
+    "owner_github_username": "devonruiz"
+  },
+  {
+    "external_id": "INTERNAL-2026-0087",
+    "title": "Verbose stack traces exposed on 500 errors",
+    "description": "Internal service leaks stack traces (including file paths) on unhandled exceptions.",
+    "severity": "low",
+    "cvss_score": 3.1,
+    "asset_name": "internal-reporting",
+    "asset_criticality": "low",
+    "owner_name": "Devon Ruiz"
+  }
+]
