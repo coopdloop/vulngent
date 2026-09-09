@@ -51,6 +51,14 @@ uv run vulngent list --status open
 uv run vulngent show 1
 uv run vulngent report
 
+# Point vulns at a GitHub repo (accepts 'owner/repo' or a github.com/git URL)
+uv run vulngent import sample_data/sample_vulns.json --repo https://github.com/you/your-repo
+uv run vulngent link-repo billing-service https://github.com/you/your-repo  # or for an existing asset
+
+# File a GitHub issue / pick up PRs+commits referencing a vuln (needs GITHUB_TOKEN)
+uv run vulngent github-issue 1
+uv run vulngent github-link 1
+
 # Run one full agent cycle: triage -> outreach -> tracking
 uv run vulngent run-cycle
 ```

@@ -21,16 +21,89 @@ def initdb() -> None:
 
 
 @app.command(name="import")
-def import_cmd(path: str) -> None:
+def import_cmd(
+    path: str,
+    repo: str = typer.Option(
+        None, "--repo", "-r", help="GitHub repo to attach to every imported vuln's asset: 'owner/repo' or a github.com URL. Overrides repo_full_name in the file."
+    ),
+) -> None:
     """Import vulnerabilities from a normalized JSON or CSV file."""
     from vulngent.ingestion.importer import import_file
+    from vulngent.integrations.github_client import parse_repo_full_name
+
+    repo_full_name = None
+    if repo:
+        try:
+            repo_full_name = parse_repo_full_name(repo)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
 
     init_db()
     with get_session() as session:
-        result = import_file(session, path)
+        result = import_file(session, path, repo_full_name=repo_full_name)
     console.print(f"[green]Imported {result.created} vulnerabilities.[/green]")
+    if repo_full_name:
+        console.print(f"[green]Linked to GitHub repo {repo_full_name}.[/green]")
     if result.skipped_duplicate:
         console.print(f"[yellow]Skipped {len(result.skipped_duplicate)} duplicates: {', '.join(result.skipped_duplicate)}[/yellow]")
+
+
+@app.command(name="link-repo")
+def link_repo_cmd(asset_name: str, repo: str) -> None:
+    """Point an existing asset at a GitHub repo ('owner/repo' or a github.com URL),
+    so github-issue/github-sync and the Tracker agent can find it."""
+    from vulngent.db import repository as repo_module
+    from vulngent.integrations.github_client import parse_repo_full_name
+
+    try:
+        repo_full_name = parse_repo_full_name(repo)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    init_db()
+    with get_session() as session:
+        asset = repo_module.find_asset_by_name(session, asset_name)
+        if not asset:
+            console.print(f"[red]No asset named '{asset_name}'. Run 'vulngent list' to see known assets.[/red]")
+            raise typer.Exit(1)
+        repo_module.set_asset_repo(session, asset, repo_full_name)
+    console.print(f"[green]Asset '{asset_name}' linked to {repo_full_name}.[/green]")
+
+
+@app.command(name="github-issue")
+def github_issue_cmd(
+    vuln_id: int, repo: str = typer.Option(None, "--repo", "-r", help="Override the asset's linked repo.")
+) -> None:
+    """File a GitHub issue for one vulnerability."""
+    from vulngent.agents.tools import create_github_issue_for_vuln
+    from vulngent.integrations.github_client import parse_repo_full_name
+
+    repo_full_name = ""
+    if repo:
+        try:
+            repo_full_name = parse_repo_full_name(repo)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+
+    init_db()
+    result = create_github_issue_for_vuln(vuln_id, repo_full_name)
+    style = "red" if result.startswith("ERROR") else "green"
+    console.print(f"[{style}]{result}[/{style}]")
+
+
+@app.command(name="github-link")
+def github_link_cmd(vuln_id: int) -> None:
+    """Search the vulnerability's linked GitHub repo for PRs/commits referencing it and
+    link any newly found ones into the ledger."""
+    from vulngent.agents.tools import link_github_prs_and_commits
+
+    init_db()
+    result = link_github_prs_and_commits(vuln_id)
+    style = "red" if result.startswith("ERROR") else "green"
+    console.print(f"[{style}]{result}[/{style}]")
 
 
 @app.command(name="list")

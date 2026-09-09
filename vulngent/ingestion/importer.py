@@ -33,7 +33,10 @@ def _load_records(path: Path) -> list[dict]:
     raise ValueError(f"Unsupported import file type: {path.suffix} (expected .json or .csv)")
 
 
-def import_file(session: Session, path: str | Path) -> ImportResult:
+def import_file(session: Session, path: str | Path, *, repo_full_name: str | None = None) -> ImportResult:
+    """Import vulnerabilities. If repo_full_name is given, it overrides each record's
+    own repo_full_name (or fills it in when a record omits one) - use this to point an
+    entire import at one GitHub repo from the CLI without editing the source file."""
     path = Path(path)
     raw_records = _load_records(path)
     result = ImportResult()
@@ -41,6 +44,8 @@ def import_file(session: Session, path: str | Path) -> ImportResult:
     for raw in raw_records:
         cleaned = {k: v for k, v in raw.items() if v not in ("", None)}
         record = VulnRecord.model_validate(cleaned)
+        if repo_full_name:
+            record.repo_full_name = repo_full_name
 
         if repo.find_vulnerability_by_external_id(session, record.external_id):
             result.skipped_duplicate.append(record.external_id)

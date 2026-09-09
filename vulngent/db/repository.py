@@ -82,6 +82,14 @@ def get_or_create_asset(
     return asset
 
 
+def find_asset_by_name(session: Session, name: str) -> Asset | None:
+    return session.execute(select(Asset).where(Asset.name == name)).scalar_one_or_none()
+
+
+def set_asset_repo(session: Session, asset: Asset, repo_full_name: str) -> None:
+    asset.repo_full_name = repo_full_name
+
+
 # --- Vulnerabilities ---------------------------------------------------
 
 # Default remediation SLA windows by severity, used to backfill due_date on ingest

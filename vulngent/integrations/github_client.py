@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from github import Auth, Github
@@ -11,6 +12,29 @@ from vulngent.config import get_settings
 
 class GitHubNotConfigured(RuntimeError):
     pass
+
+
+_REPO_URL_RE = re.compile(
+    r"^(?:https?://)?(?:www\.)?github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$"
+)
+_REPO_SSH_RE = re.compile(r"^git@github\.com:(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$")
+
+
+def parse_repo_full_name(value: str) -> str:
+    """Normalize a GitHub repo reference to 'owner/repo'. Accepts an existing
+    'owner/repo' slug as-is, or a full/partial GitHub URL in any common form:
+    https://github.com/owner/repo, https://github.com/owner/repo.git,
+    git@github.com:owner/repo.git, github.com/owner/repo."""
+    value = value.strip()
+    for pattern in (_REPO_URL_RE, _REPO_SSH_RE):
+        match = pattern.match(value)
+        if match:
+            return f"{match.group('owner')}/{match.group('repo')}"
+    if re.fullmatch(r"[^/\s@:]+/[^/\s@:]+", value):
+        return value
+    raise ValueError(
+        f"Could not parse '{value}' as a GitHub repo. Expected 'owner/repo' or a github.com URL."
+    )
 
 
 @dataclass
