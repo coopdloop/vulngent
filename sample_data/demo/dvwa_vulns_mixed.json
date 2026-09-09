@@ -1,0 +1,122 @@
+[
+  {
+    "external_id": "CVE-2021-26691",
+    "title": "httpd: mod_session: Heap overflow via a crafted SessionHeader value",
+    "description": "In Apache HTTP Server versions 2.4.0 to 2.4.46 a specially crafted SessionHeader sent by an origin server could cause a heap overflow\n\nPackage: apache2 2.4.25-3+deb9u5. Fixed in 2.4.25-3+deb9u10.",
+    "severity": "critical",
+    "cvss_score": 9.8,
+    "asset_name": "dvwa",
+    "repo_full_name": "digininja/DVWA",
+    "asset_criticality": "high",
+    "owner_name": "Demo Security Owner",
+    "owner_email": "secops@example.com"
+  },
+  {
+    "external_id": "CVE-2021-39275",
+    "title": "httpd: Out-of-bounds write in ap_escape_quotes() via malicious input",
+    "description": "ap_escape_quotes() may write beyond the end of a buffer when given malicious input. No included modules pass untrusted data to these functions, but third-party / external modules may. This issue affects Apache HTTP Server 2.4.48 and earlier.\n\nPackage: apache2 2.4.25-3+deb9u5. Fixed in 2.4.25-3+deb9u11.",
+    "severity": "critical",
+    "cvss_score": 9.8,
+    "asset_name": "dvwa",
+    "repo_full_name": "digininja/DVWA",
+    "asset_criticality": "high",
+    "owner_name": "Demo Security Owner",
+    "owner_email": "secops@example.com"
+  },
+  {
+    "external_id": "CVE-2021-44790",
+    "title": "httpd: mod_lua: Possible buffer overflow when parsing multipart content",
+    "description": "A carefully crafted request body can cause a buffer overflow in the mod_lua multipart parser (r:parsebody() called from Lua scripts). The Apache httpd team is not aware of an exploit for the vulnerabilty though it might be possible to craft one. This issue affects Apache HTTP Server 2.4.51 and earlier.\n\nPackage: apache2 2.4.25-3+deb9u5. Fixed in 2.4.25-3+deb9u12.",
+    "severity": "critical",
+    "cvss_score": 9.8,
+    "asset_name": "dvwa",
+    "repo_full_name": "digininja/DVWA",
+    "asset_criticality": "high",
+    "owner_name": "Demo Security Owner",
+    "owner_email": "secops@example.com"
+  },
+  {
+    "external_id": "CVE-2022-22720",
+    "title": "httpd: Errors encountered during the discarding of request body lead to HTTP request smuggling",
+    "description": "Apache HTTP Server 2.4.52 and earlier fails to close inbound connection when errors are encountered discarding the request body, exposing the server to HTTP Request Smuggling\n\nPackage: apache2 2.4.25-3+deb9u5. Fixed in 2.4.25-3+deb9u13.",
+    "severity": "critical",
+    "cvss_score": 9.8,
+    "asset_name": "dvwa",
+    "repo_full_name": "digininja/DVWA",
+    "asset_criticality": "high",
+    "owner_name": "Demo Security Owner",
+    "owner_email": "secops@example.com"
+  },
+  {
+    "external_id": "CVE-2022-23943",
+    "title": "httpd: mod_sed: Read/write beyond bounds",
+    "description": "Out-of-bounds Write vulnerability in mod_sed of Apache HTTP Server allows an attacker to overwrite heap memory with possibly attacker provided data. This issue affects Apache HTTP Server 2.4 version 2.4.52 and prior versions.\n\nPackage: apache2 2.4.25-3+deb9u5. Fixed in 2.4.25-3+deb9u13.",
+    "severity": "critical",
+    "cvss_score": 9.8,
+    "asset_name": "dvwa",
+    "repo_full_name": "digininja/DVWA",
+    "asset_criticality": "high",
+    "owner_name": "Demo Security Owner",
+    "owner_email": "secops@example.com"
+  },
+  {
+    "external_id": "CVE-2019-8907",
+    "title": "file: do_core_note in readelf.c allows remote attackers to cause a denial of service",
+    "description": "do_core_note in readelf.c in libmagic.a in file 5.35 allows remote attackers to cause a denial of service (stack corruption and application crash) or possibly have unspecified other impact.\n\nPackage: file 1:5.30-1+deb9u2. No fix available yet.",
+    "severity": "high",
+    "cvss_score": 8.8,
+    "asset_name": "dvwa",
+    "repo_full_name": "digininja/DVWA",
+    "asset_criticality": "high",
+    "owner_name": "Demo Security Owner",
+    "owner_email": "secops@example.com"
+  },
+  {
+    "external_id": "CVE-2018-1000858",
+    "title": "gnupg2: Cross site request forgery in dirmngr resulting in an information disclosure or denial of service",
+    "description": "GnuPG version 2.1.12 - 2.2.11 contains a Cross ite Request Forgery (CSRF) vulnerability in dirmngr that can result in Attacker controlled CSRF, Information Disclosure, DoS. This attack appear to be exploitable via Victim must perform a WKD request, e.g. enter an email address in the composer window of Thunderbird/Enigmail. This vulnerability appears to have been fixed in after commit 4a4bb874f63741026bd26264c43bb32b1099f060.\n\nPackage: gpgv 2.1.18-8~deb9u2. No fix available yet.",
+    "severity": "high",
+    "cvss_score": 8.8,
+    "asset_name": "dvwa",
+    "repo_full_name": "digininja/DVWA",
+    "asset_criticality": "high",
+    "owner_name": "Demo Security Owner",
+    "owner_email": "secops@example.com"
+  },
+  {
+    "external_id": "CVE-2022-1271",
+    "title": "gzip: arbitrary-file-write vulnerability",
+    "description": "An arbitrary file write vulnerability was found in GNU gzip's zgrep utility. When zgrep is applied on the attacker's chosen file name (for example, a crafted file name), this can overwrite an attacker's content to an arbitrary attacker-selected file. This flaw occurs due to insufficient validation when processing filenames with two or more newlines where selected content and the target file names are embedded in crafted multi-line file names. This flaw allows a remote, low privileged attacker to force zgrep to write arbitrary files on the system.\n\nPackage: gzip 1.6-5+b1. Fixed in 1.6-5+deb9u1.",
+    "severity": "high",
+    "cvss_score": 8.8,
+    "asset_name": "dvwa",
+    "repo_full_name": "digininja/DVWA",
+    "asset_criticality": "high",
+    "owner_name": "Demo Security Owner",
+    "owner_email": "secops@example.com"
+  },
+  {
+    "external_id": "CVE-2022-31626",
+    "title": "php: password of excessive length triggers buffer overflow leading to RCE",
+    "description": "In PHP versions 7.4.x below 7.4.30, 8.0.x below 8.0.20, and 8.1.x below 8.1.7, when pdo_mysql extension with mysqlnd driver, if the third party is allowed to supply host to connect to and the password for the connection, password of excessive length can trigger a buffer overflow in PHP, which can lead to a remote code execution vulnerability.\n\nPackage: libapache2-mod-php7.0 7.0.30-0+deb9u1. No fix available yet.",
+    "severity": "high",
+    "cvss_score": 8.8,
+    "asset_name": "dvwa",
+    "repo_full_name": "digininja/DVWA",
+    "asset_criticality": "high",
+    "owner_name": "Demo Security Owner",
+    "owner_email": "secops@example.com"
+  },
+  {
+    "external_id": "CVE-2021-45960",
+    "title": "expat: Large number of prefixed XML attributes on a single tag can crash libexpat",
+    "description": "In Expat (aka libexpat) before 2.4.3, a left shift by 29 (or more) places in the storeAtts function in xmlparse.c can lead to realloc misbehavior (e.g., allocating too few bytes, or only freeing memory).\n\nPackage: libexpat1 2.2.0-2+deb9u1. Fixed in 2.2.0-2+deb9u4.",
+    "severity": "high",
+    "cvss_score": 8.8,
+    "asset_name": "dvwa",
+    "repo_full_name": "digininja/DVWA",
+    "asset_criticality": "high",
+    "owner_name": "Demo Security Owner",
+    "owner_email": "secops@example.com"
+  }
+]
