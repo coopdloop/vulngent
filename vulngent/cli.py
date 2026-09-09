@@ -80,7 +80,7 @@ def report(
     output: str = typer.Option(None, "--output", "-o", help="File path to write the report to (required for pdf/docx)."),
 ) -> None:
     """Print or export the current ledger status report."""
-    from vulngent.agents.tools import generate_status_report
+    from vulngent.report_data import collect_report_data
     from vulngent.reporting import SUPPORTED_FORMATS, render_report
 
     fmt = format.lower()
@@ -92,7 +92,9 @@ def report(
         raise typer.Exit(1)
 
     init_db()
-    rendered = render_report(generate_status_report(), fmt)
+    with get_session() as session:
+        data = collect_report_data(session)
+    rendered = render_report(data, fmt)
 
     if output:
         mode = "wb" if isinstance(rendered, bytes) else "w"
