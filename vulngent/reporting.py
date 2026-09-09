@@ -22,6 +22,7 @@ INK = "#111827"
 MUTED = "#6B7280"
 HAIRLINE = "#E5E7EB"
 PANEL_BG = "#F8FAFC"
+OVERDUE_COLOR = "#B91C1C"
 
 _ASCII_TRANSLIT = {
     "\u2014": "-",  # em dash
@@ -54,7 +55,7 @@ def render_markdown(data: ReportData) -> str:
     lines = [f"# {data.branding.title}", ""]
     lines.append(f"Prepared for {data.branding.company_name} · Generated {data.generated_at:%Y-%m-%d %H:%M UTC}")
     lines.append("")
-    lines.append(f"Open: {data.open_count}  In progress: {data.in_progress_count}")
+    lines.append(f"Open: {data.open_count}  In progress: {data.in_progress_count}  Overdue: {data.overdue_count}")
     lines.append("")
     lines.append("## By severity")
     for sev, count in data.by_severity.items():
@@ -62,7 +63,14 @@ def render_markdown(data: ReportData) -> str:
     lines.append("")
     lines.append("## Top priority")
     for v in data.top_vulns:
-        lines.append(f"- #{v.id} [{v.severity}] {v.external_id} — {v.title} (score={v.priority_score})")
+        overdue = f" [OVERDUE {v.days_overdue}d]" if v.is_overdue else ""
+        lines.append(f"- #{v.id} [{v.severity}] {v.external_id} — {v.title} (score={v.priority_score}){overdue}")
+    lines.append("")
+    lines.append("## Past SLA (overdue)")
+    if not data.overdue_vulns:
+        lines.append("- None")
+    for v in data.overdue_vulns:
+        lines.append(f"- #{v.id} [{v.severity}] {v.external_id} — {v.title} (due {v.due_date}, {v.days_overdue}d overdue)")
     lines.append("")
     lines.append(f"## Commitments due within 7 days")
     for c in data.commitments_due:
@@ -200,6 +208,7 @@ class _ReportPDF:
         cards = [
             (str(self.data.open_count), "Open", INK),
             (str(self.data.in_progress_count), "In Progress", self.b.accent_color),
+            (str(self.data.overdue_count), "Past SLA", OVERDUE_COLOR),
             (str(self.data.by_severity.get("critical", 0)), "Critical", SEVERITY_COLORS["critical"]),
             (str(self.data.by_severity.get("high", 0)), "High", SEVERITY_COLORS["high"]),
         ]
@@ -208,8 +217,8 @@ class _ReportPDF:
         card_h = 28
         for i, (num, label, color) in enumerate(cards):
             x = self.MARGIN + i * (card_w + gap)
-            pdf.set_draw_color(HAIRLINE)
-            pdf.set_fill_color(PANEL_BG)
+            pdf.set_draw_color(OVERDUE_COLOR if label == "Past SLA" and self.data.overdue_count else HAIRLINE)
+            pdf.set_fill_color("#FEF2F2" if label == "Past SLA" and self.data.overdue_count else PANEL_BG)
             pdf.rect(x, y, card_w, card_h, style="FD", round_corners=True, corner_radius=2)
             pdf.set_xy(x, y + 5)
             pdf.set_font("Helvetica", "B", 20)
@@ -266,10 +275,12 @@ class _ReportPDF:
         from fpdf.fonts import FontFace
 
         header_style = FontFace(color="#FFFFFF", fill_color=self.b.primary_color, emphasis="B")
+        overdue_style = FontFace(color=OVERDUE_COLOR, emphasis="B")
         pdf.set_font("Helvetica", "", 9)
+        pdf.set_fill_color(255, 255, 255)
         with pdf.table(
-            col_widths=(15, 27, 20, 88, 15, 15),
-            text_align=("LEFT", "LEFT", "CENTER", "LEFT", "CENTER", "CENTER"),
+            col_widths=(8, 23, 21, 57, 19, 13, 13),
+            text_align=("LEFT", "LEFT", "CENTER", "LEFT", "CENTER", "CENTER", "CENTER"),
             borders_layout="HORIZONTAL_LINES",
             cell_fill_mode="ROWS",
             cell_fill_color=PANEL_BG,
@@ -278,7 +289,7 @@ class _ReportPDF:
             padding=(1.6, 2, 1.6, 2),
         ) as table:
             row = table.row()
-            for h in ("ID", "CVE / Finding", "Severity", "Title", "CVSS", "Score"):
+            for h in ("ID", "CVE / Finding", "Severity", "Title", "Due", "CVSS", "Score"):
                 row.cell(h)
             for v in data:
                 row = table.row()
@@ -289,8 +300,51 @@ class _ReportPDF:
                 )
                 row.cell(v.severity.upper(), style=sev_style, align="C")
                 row.cell(_pdf_safe(v.title))
+                due_text = f"{v.days_overdue}d late" if v.is_overdue else (str(v.due_date) if v.due_date else "-")
+                row.cell(due_text, style=overdue_style if v.is_overdue else None)
                 row.cell(f"{v.cvss_score:.1f}" if v.cvss_score is not None else "-")
                 row.cell(f"{v.priority_score:.1f}" if v.priority_score is not None else "-")
+
+    def _overdue_section(self) -> None:
+        pdf = self.pdf
+        data = self.data.overdue_vulns
+        self._heading(f"Past SLA — {self.data.overdue_count} Overdue")
+        if not data:
+            pdf.set_font("Helvetica", "", 10)
+            pdf.set_text_color(MUTED)
+            pdf.multi_cell(0, 6, "Nothing is past its remediation SLA. Nice work.")
+            return
+
+        from fpdf.fonts import FontFace
+
+        header_style = FontFace(color="#FFFFFF", fill_color=OVERDUE_COLOR, emphasis="B")
+        overdue_style = FontFace(color=OVERDUE_COLOR, emphasis="B")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_fill_color(255, 255, 255)
+        with pdf.table(
+            col_widths=(8, 23, 21, 61, 19, 16),
+            text_align=("LEFT", "LEFT", "CENTER", "LEFT", "CENTER", "CENTER"),
+            borders_layout="HORIZONTAL_LINES",
+            cell_fill_mode="ROWS",
+            cell_fill_color="#FEF2F2",
+            headings_style=header_style,
+            line_height=5,
+            padding=(1.6, 2, 1.6, 2),
+        ) as table:
+            row = table.row()
+            for h in ("ID", "CVE / Finding", "Severity", "Title", "Due Date", "Overdue By"):
+                row.cell(h)
+            for v in data:
+                row = table.row()
+                row.cell(f"#{v.id}")
+                row.cell(_pdf_safe(v.external_id))
+                sev_style = FontFace(
+                    color="#FFFFFF", fill_color=SEVERITY_COLORS.get(v.severity, MUTED), emphasis="B"
+                )
+                row.cell(v.severity.upper(), style=sev_style, align="C")
+                row.cell(_pdf_safe(v.title))
+                row.cell(str(v.due_date) if v.due_date else "-")
+                row.cell(f"{v.days_overdue}d", style=overdue_style)
 
     def _commitments_section(self) -> None:
         commitments = self.data.commitments_due
@@ -302,6 +356,7 @@ class _ReportPDF:
             pdf.multi_cell(0, 6, "No commitments due in the reporting window.")
             return
         pdf.set_font("Helvetica", "", 9)
+        pdf.set_fill_color(255, 255, 255)
         with pdf.table(
             col_widths=(20, 105, 25, 25),
             text_align="LEFT",
@@ -325,6 +380,7 @@ class _ReportPDF:
         self._cover_page()
         self.pdf.add_page()
         self._findings_table()
+        self._overdue_section()
         self._commitments_section()
         return bytes(self.pdf.output())
 
@@ -385,15 +441,22 @@ def _to_docx(data: ReportData) -> bytes:
 
     doc.add_paragraph()
 
-    kpi_table = doc.add_table(rows=2, cols=4)
+    kpi_table = doc.add_table(rows=2, cols=5)
     kpi_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    overdue_rgb = RGBColor(0xB9, 0x1C, 0x1C)
     kpis = [
-        (str(data.open_count), "Open"),
-        (str(data.in_progress_count), "In Progress"),
-        (str(data.by_severity.get("critical", 0)), "Critical"),
-        (str(data.by_severity.get("high", 0)), "High"),
+        (str(data.open_count), "Open", _rgb(b.primary_color), "F8FAFC"),
+        (str(data.in_progress_count), "In Progress", _rgb(b.accent_color), "F8FAFC"),
+        (
+            str(data.overdue_count),
+            "Past SLA",
+            overdue_rgb,
+            "FEF2F2" if data.overdue_count else "F8FAFC",
+        ),
+        (str(data.by_severity.get("critical", 0)), "Critical", RGBColor(0xDC, 0x26, 0x26), "F8FAFC"),
+        (str(data.by_severity.get("high", 0)), "High", RGBColor(0xEA, 0x58, 0x0C), "F8FAFC"),
     ]
-    for col, (num, label) in enumerate(kpis):
+    for col, (num, label, color, shade) in enumerate(kpis):
         num_cell = kpi_table.cell(0, col)
         num_cell.text = ""
         p = num_cell.paragraphs[0]
@@ -401,8 +464,8 @@ def _to_docx(data: ReportData) -> bytes:
         run = p.add_run(num)
         run.bold = True
         run.font.size = Pt(20)
-        run.font.color.rgb = _rgb(b.primary_color)
-        _shade_cell(num_cell, "F8FAFC")
+        run.font.color.rgb = color
+        _shade_cell(num_cell, shade)
 
         label_cell = kpi_table.cell(1, col)
         label_cell.text = ""
@@ -411,7 +474,7 @@ def _to_docx(data: ReportData) -> bytes:
         run = p.add_run(label)
         run.font.size = Pt(9)
         run.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
-        _shade_cell(label_cell, "F8FAFC")
+        _shade_cell(label_cell, shade)
 
     doc.add_paragraph()
     doc.add_heading("By Severity", level=2)
@@ -422,10 +485,10 @@ def _to_docx(data: ReportData) -> bytes:
     if not data.top_vulns:
         doc.add_paragraph("No open or in-progress vulnerabilities.")
     else:
-        table = doc.add_table(rows=1, cols=6)
+        table = doc.add_table(rows=1, cols=7)
         table.style = "Light Grid Accent 1"
         hdr = table.rows[0].cells
-        for i, h in enumerate(("ID", "CVE / Finding", "Severity", "Title", "CVSS", "Score")):
+        for i, h in enumerate(("ID", "CVE / Finding", "Severity", "Title", "Due", "CVSS", "Score")):
             hdr[i].text = h
         for v in data.top_vulns:
             cells = table.add_row().cells
@@ -433,8 +496,36 @@ def _to_docx(data: ReportData) -> bytes:
             cells[1].text = v.external_id
             cells[2].text = v.severity.upper()
             cells[3].text = v.title
-            cells[4].text = f"{v.cvss_score:.1f}" if v.cvss_score is not None else "-"
-            cells[5].text = f"{v.priority_score:.1f}" if v.priority_score is not None else "-"
+            due_cell = cells[4]
+            due_cell.text = f"{v.days_overdue}d late" if v.is_overdue else (str(v.due_date) if v.due_date else "-")
+            if v.is_overdue:
+                for run in due_cell.paragraphs[0].runs:
+                    run.bold = True
+                    run.font.color.rgb = overdue_rgb
+            cells[5].text = f"{v.cvss_score:.1f}" if v.cvss_score is not None else "-"
+            cells[6].text = f"{v.priority_score:.1f}" if v.priority_score is not None else "-"
+
+    doc.add_heading(f"Past SLA — {data.overdue_count} Overdue", level=2)
+    if not data.overdue_vulns:
+        doc.add_paragraph("Nothing is past its remediation SLA. Nice work.")
+    else:
+        table = doc.add_table(rows=1, cols=6)
+        table.style = "Light Grid Accent 1"
+        hdr = table.rows[0].cells
+        for i, h in enumerate(("ID", "CVE / Finding", "Severity", "Title", "Due Date", "Overdue By")):
+            hdr[i].text = h
+        for v in data.overdue_vulns:
+            cells = table.add_row().cells
+            cells[0].text = f"#{v.id}"
+            cells[1].text = v.external_id
+            cells[2].text = v.severity.upper()
+            cells[3].text = v.title
+            cells[4].text = str(v.due_date) if v.due_date else "-"
+            overdue_cell = cells[5]
+            overdue_cell.text = f"{v.days_overdue}d"
+            for run in overdue_cell.paragraphs[0].runs:
+                run.bold = True
+                run.font.color.rgb = overdue_rgb
 
     doc.add_heading("Commitments Due Soon", level=2)
     if not data.commitments_due:

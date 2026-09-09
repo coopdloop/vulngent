@@ -25,6 +25,9 @@ class VulnRecord(BaseModel):
     owner_slack_id: str | None = None
     owner_github_username: str | None = None
     discovered_at: dt.datetime | None = None
+    due_date: dt.datetime | None = Field(
+        default=None, description="Remediation deadline; defaults to a severity-based SLA if omitted"
+    )
 
     @field_validator("severity", mode="before")
     @classmethod

@@ -47,12 +47,13 @@ def list_cmd(status: str = "open") -> None:
         raise typer.Exit(1)
 
     table = Table(title=f"Vulnerabilities ({status})")
-    for col in ("id", "external_id", "title", "severity", "priority", "reachability", "asset"):
+    for col in ("id", "external_id", "title", "severity", "priority", "reachability", "asset", "overdue"):
         table.add_column(col)
 
     with get_session() as session:
         vulns = repo.list_vulnerabilities(session, status=status_enum)
         for v in vulns:
+            days_late = repo.days_overdue(v)
             table.add_row(
                 str(v.id),
                 escape(v.external_id),
@@ -61,6 +62,7 @@ def list_cmd(status: str = "open") -> None:
                 str(v.priority_score),
                 v.reachability.value,
                 v.asset.name if v.asset else "-",
+                f"[red]{days_late}d[/red]" if days_late else "-",
             )
     console.print(table)
 

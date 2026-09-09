@@ -38,7 +38,8 @@ def _err(exc: Exception) -> str:
 def list_open_vulnerabilities(min_priority: float = 0.0) -> str:
     """List open/in-progress vulnerabilities, ordered by priority score (highest first).
     Optionally filter to only those at or above min_priority. Returns a JSON list with
-    id, external_id, title, severity, priority_score, reachability, and asset name."""
+    id, external_id, title, severity, priority_score, reachability, asset name, and
+    days_overdue (past the remediation SLA due date; null if not overdue)."""
     with get_session() as session:
         vulns = repo.list_vulnerabilities(session, status=VulnStatus.OPEN) + repo.list_vulnerabilities(
             session, status=VulnStatus.IN_PROGRESS
@@ -53,6 +54,7 @@ def list_open_vulnerabilities(min_priority: float = 0.0) -> str:
                 "reachability": v.reachability.value,
                 "status": v.status.value,
                 "asset": v.asset.name if v.asset else None,
+                "days_overdue": repo.days_overdue(v),
             }
             for v in vulns
             if (v.priority_score or 0) >= min_priority
@@ -98,6 +100,8 @@ def get_vulnerability_detail(vuln_id: int) -> str:
             "reachability": v.reachability.value,
             "priority_score": v.priority_score,
             "priority_rationale": v.priority_rationale,
+            "due_date": v.due_date.isoformat() if v.due_date else None,
+            "days_overdue": repo.days_overdue(v),
             "asset": v.asset.name if v.asset else None,
             "repo_full_name": v.asset.repo_full_name if v.asset else None,
             "owner": v.asset.owner.name if v.asset and v.asset.owner else None,

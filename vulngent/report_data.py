@@ -28,6 +28,12 @@ class VulnSummary:
     priority_score: float | None
     asset_name: str
     owner_name: str
+    due_date: dt.date | None
+    days_overdue: int | None
+
+    @property
+    def is_overdue(self) -> bool:
+        return self.days_overdue is not None
 
 
 @dataclass
@@ -66,8 +72,10 @@ class ReportData:
     generated_at: dt.datetime
     open_count: int
     in_progress_count: int
+    overdue_count: int
     by_severity: dict[str, int]
     top_vulns: list[VulnSummary]
+    overdue_vulns: list[VulnSummary]
     commitments_due: list[CommitmentSummary]
     branding: Branding = field(default_factory=Branding.from_settings)
 
@@ -76,7 +84,7 @@ class ReportData:
         return self.open_count + self.in_progress_count
 
 
-def _summarize(v: Vulnerability) -> VulnSummary:
+def _summarize(v: Vulnerability, *, as_of: dt.datetime) -> VulnSummary:
     return VulnSummary(
         id=v.id,
         external_id=v.external_id,
@@ -88,12 +96,18 @@ def _summarize(v: Vulnerability) -> VulnSummary:
         priority_score=v.priority_score,
         asset_name=v.asset.name if v.asset else "-",
         owner_name=(v.asset.owner.name if v.asset and v.asset.owner else "-"),
+        due_date=v.due_date.date() if v.due_date else None,
+        days_overdue=repo.days_overdue(v, as_of=as_of),
     )
 
 
-def collect_report_data(session: Session, *, top_n: int = 15, commitments_within_days: int = 7) -> ReportData:
+def collect_report_data(
+    session: Session, *, top_n: int = 15, overdue_n: int = 10, commitments_within_days: int = 7
+) -> ReportData:
+    now = dt.datetime.now(dt.timezone.utc)
     open_vulns = repo.list_vulnerabilities(session, status=VulnStatus.OPEN)
     in_progress = repo.list_vulnerabilities(session, status=VulnStatus.IN_PROGRESS)
+    overdue = repo.list_overdue_vulnerabilities(session)
     due_soon = repo.list_commitments_due(session, within_days=commitments_within_days)
 
     actionable = open_vulns + in_progress
@@ -114,10 +128,12 @@ def collect_report_data(session: Session, *, top_n: int = 15, commitments_within
         )
 
     return ReportData(
-        generated_at=dt.datetime.now(dt.timezone.utc),
+        generated_at=now,
         open_count=len(open_vulns),
         in_progress_count=len(in_progress),
+        overdue_count=len(overdue),
         by_severity=by_severity,
-        top_vulns=[_summarize(v) for v in top],
+        top_vulns=[_summarize(v, as_of=now) for v in top],
+        overdue_vulns=[_summarize(v, as_of=now) for v in overdue[:overdue_n]],
         commitments_due=[_commitment_summary(c) for c in due_soon],
     )

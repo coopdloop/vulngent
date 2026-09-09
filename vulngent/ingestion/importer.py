@@ -73,6 +73,7 @@ def import_file(session: Session, path: str | Path) -> ImportResult:
             cvss_score=record.cvss_score,
             asset=asset,
             discovered_at=record.discovered_at,
+            due_date=record.due_date,
         )
         repo.set_priority(session, vuln, actor="importer")
         result.created += 1

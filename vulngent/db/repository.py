@@ -84,6 +84,17 @@ def get_or_create_asset(
 
 # --- Vulnerabilities ---------------------------------------------------
 
+# Default remediation SLA windows by severity, used to backfill due_date on ingest
+# when a scanner/import doesn't supply one. Industry-typical (e.g. critical fixed
+# within a sprint, low severity within a quarter) - override per-org via due_date.
+SLA_DAYS_BY_SEVERITY = {
+    Severity.CRITICAL: 15,
+    Severity.HIGH: 30,
+    Severity.MEDIUM: 60,
+    Severity.LOW: 90,
+    Severity.INFO: 180,
+}
+
 
 def create_vulnerability(
     session: Session,
@@ -95,7 +106,9 @@ def create_vulnerability(
     cvss_score: float | None = None,
     asset: Asset | None = None,
     discovered_at: dt.datetime | None = None,
+    due_date: dt.datetime | None = None,
 ) -> Vulnerability:
+    discovered = discovered_at or dt.datetime.now(dt.timezone.utc)
     vuln = Vulnerability(
         external_id=external_id,
         title=title,
@@ -103,7 +116,8 @@ def create_vulnerability(
         severity=severity,
         cvss_score=cvss_score,
         asset=asset,
-        discovered_at=discovered_at or dt.datetime.now(dt.timezone.utc),
+        discovered_at=discovered,
+        due_date=due_date or (discovered + dt.timedelta(days=SLA_DAYS_BY_SEVERITY.get(severity, 90))),
     )
     session.add(vuln)
     session.flush()
@@ -196,6 +210,36 @@ def compute_priority_score(vuln: Vulnerability) -> tuple[float, str]:
         f"age_days={age_days}({age_pts:.1f})"
     )
     return round(score, 1), rationale
+
+
+def days_overdue(vuln: Vulnerability, *, as_of: dt.datetime | None = None) -> int | None:
+    """Days past due_date, or None if there's no due date or it's not yet due.
+    Only meaningful for vulns still open/in-progress; callers should check status."""
+    if vuln.due_date is None:
+        return None
+    now = as_of or dt.datetime.now(dt.timezone.utc)
+    due = vuln.due_date if vuln.due_date.tzinfo else vuln.due_date.replace(tzinfo=dt.timezone.utc)
+    delta = (now - due).days
+    return delta if delta > 0 else None
+
+
+def is_overdue(vuln: Vulnerability, *, as_of: dt.datetime | None = None) -> bool:
+    return vuln.status in (VulnStatus.OPEN, VulnStatus.IN_PROGRESS) and days_overdue(vuln, as_of=as_of) is not None
+
+
+def list_overdue_vulnerabilities(session: Session) -> list[Vulnerability]:
+    """Open/in-progress vulnerabilities past their due_date, highest priority first."""
+    now = dt.datetime.now(dt.timezone.utc)
+    stmt = (
+        select(Vulnerability)
+        .where(
+            Vulnerability.status.in_((VulnStatus.OPEN, VulnStatus.IN_PROGRESS)),
+            Vulnerability.due_date.is_not(None),
+            Vulnerability.due_date < now,
+        )
+        .order_by(Vulnerability.priority_score.desc().nulls_last())
+    )
+    return list(session.execute(stmt).scalars().all())
 
 
 def set_priority(session: Session, vuln: Vulnerability, *, actor: str = "agent") -> float:
