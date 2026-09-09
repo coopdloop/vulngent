@@ -106,6 +106,21 @@ def github_link_cmd(vuln_id: int) -> None:
     console.print(f"[{style}]{result}[/{style}]")
 
 
+@app.command(name="scan")
+def scan_cmd(
+    repo_url: str = typer.Argument(..., help="URL of the GitHub repository to scan."),
+    scanners: str = typer.Option("all", "--scanners", "-s", help="Comma-separated list of scanners to run: sast, sca, secrets, all."),
+) -> None:
+    """Clone a GitHub repo, scan it for vulnerabilities, and import the findings."""
+    from vulngent.scanning import ScanError, run_scan_pipeline
+
+    try:
+        run_scan_pipeline(repo_url, scanners)
+    except ScanError as exc:
+        console.print(f"[red]Scan failed: {exc}[/red]")
+        raise typer.Exit(1)
+
+
 @app.command(name="list")
 def list_cmd(status: str = "open") -> None:
     """List vulnerabilities by status (open, in_progress, remediated, risk_accepted, false_positive)."""
