@@ -69,7 +69,10 @@ function setView(view) {
 document.querySelectorAll(".nav-item[data-view]").forEach((btn) => {
   btn.addEventListener("click", () => setView(btn.dataset.view));
 });
-setView("chat");
+// Initial view is applied at the end of the module: setView touches state
+// (cursor timers, dashboard els) declared further down, and calling it here
+// hits the temporal dead zone and kills the whole script.
+queueMicrotask(() => setView("chat"));
 
 // ==== Inspector panel ====
 function applyInspectorVisibility() {
