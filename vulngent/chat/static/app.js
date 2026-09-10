@@ -385,6 +385,13 @@ function repositionAgent() {
     }
   } else if (currentView === "dashboard") {
     setAgentAnchor(null); // hand control to the mouse-follow handlers
+    agentLerpFactor = 0.18;
+    agentCursorEl.classList.remove("agent-spring");
+    agentCursorEl.classList.add("agent-follow");
+    if (!cursorActive) {
+      const rect = dashboardViewEl.getBoundingClientRect();
+      startCursor(rect.left + rect.width / 2, rect.top + 120);
+    }
   } else {
     springAgentTo("navbar");
   }
@@ -751,7 +758,7 @@ function renderDashboard(data) {
   document.getElementById("dashboard-kpis").innerHTML = kpis
     .map(
       (k) => `
-      <div class="rounded-2xl border ${k.alert ? "border-red-200 bg-red-50" : "border-slate-200 bg-white"} p-3.5">
+      <div class="dash-item rounded-2xl border ${k.alert ? "border-red-200 bg-red-50" : "border-slate-200 bg-white"} p-3.5" data-item='${escapeHTML(JSON.stringify({ kind: "kpi", title: k.label, value: k.value ?? 0 }))}'>
         <p class="text-2xl font-semibold" style="color:${k.color}">${k.value ?? 0}</p>
         <p class="mt-0.5 text-[11px] font-medium text-slate-400">${k.label}</p>
       </div>`
@@ -766,7 +773,7 @@ function renderDashboard(data) {
         .map(([sev, n]) => {
           const pct = Math.max((n / total) * 100, n ? 2 : 0);
           return `
-          <div class="flex items-center gap-3">
+          <div class="dash-item flex items-center gap-3 rounded-lg px-2 py-1.5" data-item='${escapeHTML(JSON.stringify({ kind: "severity", severity: sev, title: `${sev} severity`, value: n }))}'>
             <span class="w-16 shrink-0 text-xs capitalize text-slate-500">${sev}</span>
             <div class="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
               <div class="h-full rounded-full transition-all duration-500" style="width:${pct}%;background:${SEVERITY_COLORS[sev] || "#64748B"}"></div>
@@ -781,7 +788,7 @@ function renderDashboard(data) {
     ? data.top_vulns
         .map(
           (v) => `
-        <div class="dash-item flex items-center gap-2.5 rounded-lg px-2 py-2.5" data-item='${escapeHTML(JSON.stringify({ external_id: v.external_id, title: v.title, asset: v.asset }))}'>
+        <div class="dash-item flex items-center gap-2.5 rounded-lg px-2 py-2.5" data-item='${escapeHTML(JSON.stringify({ kind: "vuln", external_id: v.external_id, title: v.title, asset: v.asset }))}'>
           <span class="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase text-white" style="background:${SEVERITY_COLORS[v.severity] || "#64748B"}">${v.severity}</span>
           <div class="min-w-0 flex-1">
             <p class="truncate text-xs font-medium text-slate-700" title="${escapeHTML(v.title)}">${escapeHTML(v.title)}</p>
@@ -799,7 +806,7 @@ function renderDashboard(data) {
     ? data.commitments_due
         .map(
           (c) => `
-        <div class="dash-item flex items-center gap-2.5 rounded-lg px-2 py-2.5" data-item='${escapeHTML(JSON.stringify({ external_id: c.external_id, title: c.description, asset: null }))}'>
+        <div class="dash-item flex items-center gap-2.5 rounded-lg px-2 py-2.5" data-item='${escapeHTML(JSON.stringify({ kind: "commitment", external_id: c.external_id, title: c.description, asset: null }))}'>
           <div class="min-w-0 flex-1">
             <p class="truncate text-xs font-medium text-slate-700">${escapeHTML(c.description)}</p>
             <p class="mt-0.5 font-mono text-[10px] text-slate-400">${escapeHTML(c.external_id)} · due ${escapeHTML(c.due_date)} · ${escapeHTML(c.status)}</p>
@@ -1141,10 +1148,16 @@ function resetCursor() {
   clearTimeout(hideTimer);
   dwellTimer = null;
   hoverItem = null;
+  setAgentGlow(null);
   unpinCursorMenu();
   agentAnchor = null;
   stopCursor();
   agentCursorEl.classList.add("hidden");
+}
+
+function setAgentGlow(item) {
+  document.querySelectorAll(".dash-item.agent-hover").forEach((el) => el.classList.remove("agent-hover"));
+  if (item) item.classList.add("agent-hover");
 }
 
 dashboardViewEl.addEventListener("mouseover", (event) => {
@@ -1155,13 +1168,13 @@ dashboardViewEl.addEventListener("mouseover", (event) => {
   clearTimeout(dwellTimer);
   if (menuItem && menuItem !== item) unpinCursorMenu();
   hoverItem = item;
+  setAgentGlow(item);
   dwellTimer = setTimeout(() => {
     if (hoverItem === item) pinCursorMenu(item);
   }, 350);
 });
 
 dashboardViewEl.addEventListener("mousemove", (event) => {
-  if (!event.target.closest(".dash-item")) return;
   agentAnchor = null;
   agentLerpFactor = 0.18;
   agentCursorEl.classList.remove("agent-spring");
@@ -1177,6 +1190,7 @@ dashboardViewEl.addEventListener("mouseout", (event) => {
   if (to && (item.contains(to) || cursorMenuEl.contains(to))) return;
   clearTimeout(dwellTimer);
   hoverItem = null;
+  setAgentGlow(null);
   hideTimer = setTimeout(() => {
     if (!hoverItem) resetCursor();
   }, 200);
@@ -1197,19 +1211,44 @@ cursorMenuEl.querySelectorAll(".cursor-option").forEach((btn) => {
     const item = parseItem(menuItem);
     const action = btn.dataset.action;
     resetCursor();
-    const ref = item.external_id ? `${item.external_id} (${item.title})` : item.title;
-    const where = item.asset ? ` on asset ${item.asset}` : "";
-    if (action === "explain") {
-      spawnChat({ label: `Explain ${item.external_id || item.title}`, prompt: `Explain ${ref}${where}: what it is, its impact, and remediation options.` });
-    } else if (action === "report") {
-      spawnChat({ label: `Report: ${item.external_id || item.title}`, prompt: `Draft a status update for ${ref}${where} — current status, priority, and next steps. Suggest a report artifact if one would help.` });
-    } else if (action === "help") {
-      spawnChat({ label: `Help: ${item.external_id || item.title}`, prompt: `I need help with ${ref}${where}. What is the recommended next step?` });
-    } else if (action === "other") {
-      spawnChat({ prefill: `About ${ref}: ` });
-    }
+    runDashboardAction(item, action);
   });
 });
+
+function runDashboardAction(item, action) {
+  const kind = item.kind || "vuln";
+  const title = item.title || "this";
+  if (kind === "kpi") {
+    const ref = `the "${title}" metric (currently ${item.value})`;
+    if (action === "other") return spawnChat({ prefill: `About the ${title} metric: ` });
+    if (action === "report") return spawnChat({ label: `Report: ${title} metric`, prompt: `Draft a short status update focused on ${ref}. Break down what's behind the number, compare severity mix, and suggest a report artifact if useful.` });
+    return spawnChat({ label: `Dig into: ${title}`, prompt: `Dig into ${ref}. What is driving this number? List the most important items behind it and the fastest ways to move it.` });
+  }
+  if (kind === "severity") {
+    const ref = `the ${title} severity band (${item.value} open/in-progress)`;
+    if (action === "other") return spawnChat({ prefill: `About ${item.severity} severity: ` });
+    if (action === "report") return spawnChat({ label: `Report: ${title}`, prompt: `Draft a status update covering ${ref}. Highlight the worst offenders and suggest a report artifact if useful.` });
+    return spawnChat({ label: `Filter: ${title}`, prompt: `List the ${item.severity} severity open and in-progress vulnerabilities, ordered by priority. Call out anything overdue and the quickest wins.` });
+  }
+  if (kind === "report") {
+    if (action === "other") return spawnChat({ prefill: `About the ${title} report: ` });
+    return spawnChat({ label: `Report: ${title}`, prompt: `Generate a ${item.format || "pdf"} status report suggestion and explain briefly what it contains and who it's for.` });
+  }
+  // vuln / commitment
+  const ref = item.external_id ? `${item.external_id} (${title})` : title;
+  const where = item.asset ? ` on asset ${item.asset}` : "";
+  if (action === "explain") {
+    spawnChat({ label: `Explain ${item.external_id || title}`, prompt: `Explain ${ref}${where}: what it is, its impact, and remediation options.` });
+  } else if (action === "report") {
+    spawnChat({ label: `Report: ${item.external_id || title}`, prompt: `Draft a status update for ${ref}${where} — current status, priority, and next steps. Suggest a report artifact if one would help.` });
+  } else if (action === "deepen") {
+    spawnChat({ label: `Dig into ${item.external_id || title}`, prompt: `Dig deeper into ${ref}${where}: root cause hypotheses, affected components, related vulnerabilities, and a concrete remediation plan.` });
+  } else if (action === "help") {
+    spawnChat({ label: `Help: ${item.external_id || title}`, prompt: `I need help with ${ref}${where}. What is the recommended next step?` });
+  } else if (action === "other") {
+    spawnChat({ prefill: `About ${ref}: ` });
+  }
+}
 
 // ==== Mention badges -> chat popover ====
 function chatsBadge(chats) {

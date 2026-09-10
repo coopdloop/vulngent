@@ -343,3 +343,13 @@ details.thoughts summary::-webkit-details-marker {
 .section-popover {
   animation: pop-in 0.15s ease-out both;
 }
+
+/* ==== Dashboard agent-hover glow ==== */
+.dash-item {
+  position: relative;
+}
+.dash-item.agent-hover {
+  background: #faf5ff;
+  border-color: #c4b5fd !important;
+  box-shadow: 0 0 0 1.5px rgba(139, 92, 246, 0.45), 0 0 18px rgba(139, 92, 246, 0.28);
+}
