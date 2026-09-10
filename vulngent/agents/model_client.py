@@ -26,6 +26,9 @@ def build_model_client(model: str | None = None) -> OpenAIChatCompletionClient:
         "json_output": True,
         "structured_output": True,
         "family": ModelFamily.CLAUDE_4_SONNET,
+        # Claude (and OpenRouter) accept any number of system messages; the chat agent
+        # injects a section-format system message per turn on top of the base one.
+        "multiple_system_messages": True,
     }
 
     return OpenAIChatCompletionClient(
