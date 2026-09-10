@@ -308,3 +308,38 @@ details.thoughts summary::-webkit-details-marker {
   border-color: #818cf8 !important;
   animation: agent-ring 1.8s ease-in-out infinite;
 }
+
+/* ==== Response sections ==== */
+.msg-section {
+  border-left: 2px solid transparent;
+  border-radius: 0 8px 8px 0;
+  padding: 2px 8px 2px 10px;
+  margin: 2px -8px 2px -10px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.msg-section:hover {
+  background: #eef2ff;
+  border-left-color: #a5b4fc;
+}
+.msg-section.section-selected {
+  background: #e0e7ff;
+  border-left-color: #4f46e5;
+}
+.section-tag {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #818cf8;
+  background: #eef2ff;
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-bottom: 2px;
+}
+
+/* ==== Section action popover ==== */
+.section-popover {
+  animation: pop-in 0.15s ease-out both;
+}

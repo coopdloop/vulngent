@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,6 +52,21 @@ WRITE_TOOL_REGISTRY: dict[str, Callable[..., str]] = {
 }
 
 SendJSON = Callable[[dict[str, Any]], Awaitable[None]]
+
+_SECTION_RE = re.compile(r"\[SECTION:([a-z0-9_]+)\](.*?)\[/SECTION\]", re.DOTALL | re.IGNORECASE)
+
+
+def split_sections(text: str) -> tuple[str, list[dict[str, str]]]:
+    """Extract [SECTION:key]...[/SECTION] blocks the model emits.
+
+    Returns (clean_markdown, sections). With no markers, the whole reply is one
+    implicit section so the UI can still offer section-level follow-ups."""
+    sections = [{"key": m.group(1).lower(), "content": m.group(2).strip()} for m in _SECTION_RE.finditer(text)]
+    if not sections:
+        return text, []
+    clean = _SECTION_RE.sub(lambda m: m.group(2).strip(), text)
+    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+    return clean, sections
 
 
 @app.middleware("http")
@@ -368,11 +384,13 @@ class ChatSession:
                         break
 
         response = final_text or tool_summary or "(no response)"
+        clean_message, sections = split_sections(response)
         self.total_usage["input_tokens"] += usage["input_tokens"]
         self.total_usage["output_tokens"] += usage["output_tokens"]
         entry = {
             "role": "assistant",
-            "message": response,
+            "message": clean_message,
+            "sections": sections,
             "tool_summary": tool_summary,
             "tool_calls": tool_calls,
             "thoughts": thoughts,

@@ -85,3 +85,26 @@ def test_collect_sessions_and_dashboard_chats(chat_db):
     dashboard = server._collect_dashboard()
     top = dashboard["top_vulns"]
     assert top[0]["chats"] == [{"id": session.session_id, "title": "What is CVE-2099-0001?"}]
+
+
+def test_split_sections():
+    text = (
+        "Intro line.\n"
+        "[SECTION:summary]\nTwo criticals are overdue.\n[/SECTION]\n"
+        "Middle.\n"
+        "[SECTION:next_steps]\n- Patch openssl\n- Rotate keys\n[/SECTION]\n"
+        "Outro."
+    )
+    clean, sections = server.split_sections(text)
+    assert [s["key"] for s in sections] == ["summary", "next_steps"]
+    assert sections[0]["content"] == "Two criticals are overdue."
+    assert "Patch openssl" in sections[1]["content"]
+    assert "[SECTION" not in clean
+    assert "Two criticals are overdue." in clean
+    assert "Intro line." in clean
+
+
+def test_split_sections_no_markers():
+    clean, sections = server.split_sections("Just a plain reply.")
+    assert clean == "Just a plain reply."
+    assert sections == []

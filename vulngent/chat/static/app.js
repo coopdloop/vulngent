@@ -31,6 +31,29 @@ let inspectorCalls = [];
 const INSPECTOR_KEY = "vulngent.inspector.collapsed";
 let inspectorCollapsed = localStorage.getItem(INSPECTOR_KEY) === "1";
 
+// --- All module state lives here: anything a top-level call path can touch
+// must be initialized before evaluation continues (TDZ guard).
+let typingBubble = null;
+let pendingSpawn = null; // { prompt?: string, prefill?: string, label?: string }
+let openPopover = null;
+
+// Agent companion physics
+let cursorTarget = { x: 0, y: 0 };
+let cursorPos = { x: 0, y: 0 };
+let cursorActive = false;
+let cursorRafId = null;
+let hoverItem = null; // .dash-item element being hovered
+let dwellTimer = null;
+let hideTimer = null;
+let menuItem = null; // item the pinned menu refers to
+let agentAnchor = null; // "navbar" | "bubble" | null (free mouse-follow)
+let agentBubbleEl = null;
+let agentLerpFactor = 0.18;
+
+// Section selection
+let sectionPopover = null;
+let sectionDocListenerBound = false;
+
 // ==== Views ====
 const VIEWS = {
   chat: { title: "Remediation Chat", subtitle: "Ask about assets, vulnerabilities, or plan actions." },
@@ -159,8 +182,6 @@ function handleSocketMessage(event) {
 }
 
 // ==== Session ====
-let pendingSpawn = null; // { prompt?: string, prefill?: string, label?: string }
-
 function handleNewSession(payload) {
   sessionId = payload.session_id;
   modelName = payload.model;
@@ -316,7 +337,6 @@ function scrollToBottom() {
   historyEl.scrollTop = historyEl.scrollHeight;
 }
 
-let typingBubble = null;
 function showTypingIndicator() {
   if (typingBubble) return;
   hideEmptyState();
@@ -408,7 +428,7 @@ function renderAgentMessage(entry) {
 
   const bubble = document.createElement("div");
   bubble.className = "max-w-[80%] rounded-2xl rounded-tl-sm border border-slate-200 bg-white px-3.5 py-2.5 text-sm shadow-sm";
-  bubble.innerHTML = `<div class="markdown">${renderMarkdown(entry.message)}</div>`;
+  bubble.innerHTML = `<div class="markdown">${renderMessageWithSections(entry)}</div>`;
 
   if (entry.thoughts && entry.thoughts.length) {
     const thoughtsEl = document.createElement("details");
@@ -462,6 +482,95 @@ function renderSystemMessage(message) {
   historyEl.appendChild(wrapper);
   scrollToBottom();
 }
+
+// ==== Response sections: highlight + continue ====
+function renderMessageWithSections(entry) {
+  const sections = Array.isArray(entry.sections) ? entry.sections.filter((s) => s && s.content) : [];
+  if (!sections.length) {
+    return renderMarkdown(entry.message);
+  }
+  let html = "";
+  sections.forEach((s, i) => {
+    html += `<div class="msg-section" data-section-key="${escapeHTML(s.key)}" data-section-text="${escapeHTML(s.content)}" title="Click to dig into this section">`;
+    if (sections.length > 1) {
+      html += `<span class="section-tag">${escapeHTML(s.key.replace(/_/g, " "))}</span>`;
+    }
+    html += `<div class="markdown">${renderMarkdown(s.content)}</div></div>`;
+  });
+  return html;
+}
+
+function initSectionInteractions() {
+  if (sectionDocListenerBound) return;
+  sectionDocListenerBound = true;
+  document.addEventListener("click", (event) => {
+    const sectionEl = event.target.closest(".msg-section");
+    if (!sectionEl) {
+      dismissSectionPopover();
+      return;
+    }
+    event.stopPropagation();
+    if (sectionEl.classList.contains("section-selected")) {
+      dismissSectionPopover();
+      return;
+    }
+    selectSection(sectionEl);
+  });
+}
+
+function selectSection(sectionEl) {
+  dismissSectionPopover();
+  sectionEl.classList.add("section-selected");
+  const key = sectionEl.dataset.sectionKey || "section";
+  const text = sectionEl.dataset.sectionText || "";
+  const pop = document.createElement("div");
+  pop.className = "section-popover absolute z-50 w-64 rounded-xl border border-slate-200 bg-white p-3 shadow-xl";
+  pop.innerHTML = `
+    <p class="text-[10px] font-semibold uppercase tracking-wider text-indigo-500">${escapeHTML(key.replace(/_/g, " "))}</p>
+    <p class="mt-1 line-clamp-2 text-xs text-slate-500">${escapeHTML(text.slice(0, 120))}${text.length > 120 ? "…" : ""}</p>
+    <div class="mt-2.5 flex gap-1.5">
+      <button class="section-continue flex-1 rounded-lg bg-indigo-600 px-2.5 py-1.5 text-[11px] font-semibold text-white transition hover:bg-indigo-500">Go deeper</button>
+      <button class="section-copy rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-medium text-slate-500 transition hover:bg-slate-50" title="Copy section">Copy</button>
+    </div>`;
+  document.body.appendChild(pop);
+  const rect = sectionEl.getBoundingClientRect();
+  pop.style.left = `${Math.min(rect.left, window.innerWidth - 270)}px`;
+  pop.style.top = `${rect.bottom + 6 + window.scrollY}px`;
+  pop.querySelector(".section-continue").addEventListener("click", () => {
+    dismissSectionPopover();
+    continueOnSection(key, text);
+  });
+  pop.querySelector(".section-copy").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      /* clipboard unavailable */
+    }
+    dismissSectionPopover();
+  });
+  sectionPopover = pop;
+}
+
+function dismissSectionPopover() {
+  if (sectionPopover) {
+    sectionPopover.remove();
+    sectionPopover = null;
+  }
+  document.querySelectorAll(".msg-section.section-selected").forEach((el) => el.classList.remove("section-selected"));
+}
+
+function continueOnSection(key, text) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    renderSystemMessage("Not connected to the server.");
+    return;
+  }
+  const quoted = text.length > 400 ? `${text.slice(0, 400)}…` : text;
+  const prompt = `Go deeper on the "${key.replace(/_/g, " ")}" section of your last reply. Expand with more detail, data, and concrete next steps. The section was:\n\n> ${quoted.replace(/\n/g, "\n> ")}`;
+  appendUserMessage(`Go deeper: ${key.replace(/_/g, " ")}`);
+  socket.send(JSON.stringify({ type: "user_message", text: prompt }));
+}
+
+initSectionInteractions();
 
 // ==== Report suggestions (inline in chat) ====
 function renderReportSuggestion(report) {
@@ -927,15 +1036,6 @@ historyEl.addEventListener("scroll", () => {
 // The agent chip lives in the navbar until work pulls it elsewhere.
 setAgentAnchor("navbar");
 
-let cursorTarget = { x: 0, y: 0 };
-let cursorPos = { x: 0, y: 0 };
-let cursorActive = false;
-let cursorRafId = null;
-let hoverItem = null; // .dash-item element being hovered
-let dwellTimer = null;
-let hideTimer = null;
-let menuItem = null; // item the pinned menu refers to
-
 function cursorLoop() {
   if (agentAnchor) {
     const point = anchorPoint();
@@ -966,10 +1066,6 @@ function stopCursor() {
 }
 
 // --- Anchored movement: the agent springs/zips between parking spots ---
-let agentAnchor = null; // "navbar" | "bubble" | null (free mouse-follow)
-let agentBubbleEl = null;
-let agentLerpFactor = 0.18;
-
 function anchorPoint() {
   if (agentAnchor === "navbar") {
     const rect = agentParkEl.getBoundingClientRect();
@@ -1116,8 +1212,6 @@ cursorMenuEl.querySelectorAll(".cursor-option").forEach((btn) => {
 });
 
 // ==== Mention badges -> chat popover ====
-let openPopover = null;
-
 function chatsBadge(chats) {
   if (!chats || !chats.length) return "";
   return `

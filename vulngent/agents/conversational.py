@@ -40,6 +40,13 @@ SYSTEM_PROMPT = dedent(
     pasting a long report into the chat.
 
     Keep replies concise and friendly, and output Markdown so the UI can render it nicely.
+
+    Structure every substantive reply into labeled sections. Wrap each section like this:
+      [SECTION:key] ...markdown content... [/SECTION]
+    Use short snake_case keys that describe the content (e.g. summary, findings, top_risks,
+    next_steps, plan, details). Pick keys that fit the reply; 2-5 sections is typical. The UI
+    uses these markers to let the analyst highlight a section and ask follow-ups about it, so
+    keep each section self-contained. Never mention the markers themselves in the prose.
     """
 ).strip().format(write_tools=", ".join(WRITE_TOOL_NAMES))
 
