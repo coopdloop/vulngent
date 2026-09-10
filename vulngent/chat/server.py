@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from vulngent.agents import tools as agent_tools
 from vulngent.agents.conversational import ConversationalAgent
-from vulngent.chat.confirmation import ConfirmationManager, PendingAction, use_confirmation_manager
+from vulngent.chat.confirmation import ConfirmationManager, PendingAction
 from vulngent.chat.settings_api import router as settings_router
 from sqlalchemy import select
 
@@ -235,10 +235,10 @@ async def generate_report(format: str = "md") -> Response:
 class ChatSession:
     def __init__(self) -> None:
         self.session_id = uuid.uuid4().hex[:8]
-        self.agent = ConversationalAgent()
+        self._confirmation_manager = ConfirmationManager()
+        self.agent = ConversationalAgent(confirmation_manager=self._confirmation_manager)
         self.history: list[dict[str, Any]] = []
         self._lock = asyncio.Lock()
-        self._confirmation_manager = ConfirmationManager()
         self.total_usage = {"input_tokens": 0, "output_tokens": 0}
         self._mentioned_vuln_ids: set[int] = set()
         self._pending_state_coro: Any = None
@@ -253,7 +253,7 @@ class ChatSession:
 
     def reset(self) -> None:
         self.session_id = uuid.uuid4().hex[:8]
-        self.agent = ConversationalAgent()
+        self.agent = ConversationalAgent(confirmation_manager=self._confirmation_manager)
         self.history.clear()
         self._confirmation_manager.clear()
         self.total_usage = {"input_tokens": 0, "output_tokens": 0}
@@ -388,8 +388,7 @@ class ChatSession:
         usage = {"input_tokens": 0, "output_tokens": 0}
 
         async with self._lock:
-            with use_confirmation_manager(self._confirmation_manager):
-                async for event in self.agent.run_stream(task=text, output_task_messages=False):
+            async for event in self.agent.run_stream(task=text, output_task_messages=False):
                     self._track_usage(event, usage)
                     if isinstance(event, TextMessage):
                         final_text = event.content

@@ -380,6 +380,9 @@ details.thoughts summary::-webkit-details-marker {
   border-radius: 9999px;
   background: currentColor;
 }
+.tool-chip.wire-lit-chip {
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.45);
+}
 .tool-chip-err {
   color: #b91c1c;
   background: #fef2f2;

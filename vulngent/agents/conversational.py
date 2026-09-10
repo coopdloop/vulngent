@@ -6,7 +6,7 @@ from autogen_agentchat.agents import AssistantAgent
 
 from vulngent.agents import tools as agent_tools
 from vulngent.agents.model_client import build_model_client
-from vulngent.chat.planner import plan_write_action
+from vulngent.chat.confirmation import ConfirmationManager
 
 WRITE_TOOL_NAMES = [
     "create_github_issue_for_vuln",
@@ -54,7 +54,6 @@ READ_ONLY_TOOLS = [
     agent_tools.get_asset_summary,
     agent_tools.generate_status_report,
     agent_tools.suggest_report,
-    plan_write_action,
 ]
 
 SECTION_FORMAT_INSTRUCTION = (
@@ -93,16 +92,47 @@ class SectionedModelClient:
         return getattr(self._inner, name)
 
 
+def _make_planner(confirmation_manager: ConfirmationManager):
+    """Bind plan_write_action to this session's ConfirmationManager.
+
+    The static-contextvar approach broke down under AutoGen's task/generator
+    layering: the manager set by use_confirmation_manager was visible to the
+    websocket handler coroutine but not to the tool-execution task AutoGen
+    spawned separately, so plan_write_action saw a None manager and returned
+    a silent error the model echoed back. Binding per-session via closure is
+    explicit and context-free."""
+
+    def plan_write_action(tool_name: str, arguments: dict | None = None, summary: str | None = None) -> str:
+        """Record a planned side-effecting action and return its details for the analyst's confirmation."""
+        import json
+
+        args = dict(arguments) if arguments else {}
+        confirmation_manager.set_pending_action(tool_name, args, summary)
+        payload = {
+            "status": "pending_confirmation",
+            "tool_name": tool_name,
+            "arguments": args,
+            "summary": summary or "",
+        }
+        return json.dumps(payload)
+
+    plan_write_action.__name__ = "plan_write_action"
+    plan_write_action.__module__ = "vulngent.agents.conversational"
+    return plan_write_action
+
+
 class ConversationalAgent:
-    def __init__(self, model: str | None = None):
+    def __init__(self, model: str | None = None, confirmation_manager: ConfirmationManager | None = None):
         from vulngent.config import get_settings
 
         self.model_name = model or get_settings().openrouter_model
+        self._confirmation_manager = confirmation_manager or ConfirmationManager()
+        planner = _make_planner(self._confirmation_manager)
         self._agent = AssistantAgent(
             name="vulngent_conversational",
             model_client=SectionedModelClient(build_model_client(model)),
             system_message=SYSTEM_PROMPT,
-            tools=READ_ONLY_TOOLS,
+            tools=[*READ_ONLY_TOOLS, planner],
             reflect_on_tool_use=True,
             max_tool_iterations=4,
         )

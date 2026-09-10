@@ -141,7 +141,7 @@
 
       <!-- ===== Chat view ===== -->
       <!-- SVG wiring overlay: spans chat history + inspector, routes per-tool cables. -->
-      <svg id="wire-layer" class="pointer-events-none absolute inset-0 z-20 hidden" xmlns="http://www.w3.org/2000/svg"></svg>
+      <svg id="wire-layer" preserveAspectRatio="none" class="pointer-events-none fixed inset-0 z-30 hidden" xmlns="http://www.w3.org/2000/svg"></svg>
       <section id="view-chat" class="flex min-h-0 flex-1 flex-col">
         <div class="relative min-h-0 flex-1">
           <div id="history" class="nice-scroll h-full overflow-y-auto px-4 py-6 lg:px-8"></div>

@@ -796,6 +796,7 @@ function resolveConfirmationCards() {
 const wireLayerEl = document.getElementById("wire-layer");
 const WIRE_COLORS = ["#6366F1", "#8B5CF6", "#7C3AED", "#A78BFA", "#4F46E5", "#9333EA", "#6D28D9", "#3B82F6"];
 
+
 function wireColor(callId) {
   let hash = 0;
   const str = String(callId || "");
@@ -804,8 +805,10 @@ function wireColor(callId) {
 }
 
 function drawWires() {
-  const frame = wireLayerEl.parentElement;
-  const frameRect = frame.getBoundingClientRect();
+  // Use the viewport as the coordinate frame — the inspector is a sibling of the
+  // chat <main>, so a parent-only frame is never guaranteed to contain both ends.
+  const frame = document.body;
+  const frameRect = { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
   const inspectorOpen = !inspectorCollapsed && currentView === "chat" && !inspectorEl.closest(".hidden") && getComputedStyle(inspectorEl).display !== "none";
   if (!inspectorOpen) {
     wireLayerEl.classList.add("hidden");
@@ -813,6 +816,10 @@ function drawWires() {
     return;
   }
   wireLayerEl.classList.remove("hidden");
+  // Size the SVG box explicitly in px so viewBox tracks 1:1 with rendered pixels
+  // even with preserveAspectRatio="none" and no parent transform.
+  wireLayerEl.style.width = `${frameRect.width}px`;
+  wireLayerEl.style.height = `${frameRect.height}px`;
   wireLayerEl.setAttribute("viewBox", `0 0 ${frameRect.width} ${frameRect.height}`);
   let markup = "";
   document.querySelectorAll(".tool-chip[data-call-id]").forEach((chip) => {
@@ -829,12 +836,27 @@ function drawWires() {
     const color = wireColor(chip.dataset.callId);
     markup += `<path class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" d="M ${sx} ${sy} C ${sx + dx} ${sy}, ${tx - dx} ${ty}, ${tx} ${ty}" stroke="${color}" />`;
     markup += `<circle class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" cx="${sx}" cy="${sy}" r="2.4" fill="${color}" />`;
+    // Connection port on the inspector end: little terminal box around the cable tip.
+    markup += `<rect class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" x="${tx - 4}" y="${ty - 5}" width="4" height="10" rx="1.2" fill="none" stroke="${color}" />`;
+    markup += `<circle class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" cx="${tx - 2}" cy="${ty}" r="2.1" fill="${color}" />`;
   });
   wireLayerEl.innerHTML = markup;
 }
 
 function setWireLit(callId, on) {
   wireLayerEl.querySelectorAll(`.wire-cable[data-call-id="${cssEscape(callId)}"]`).forEach((p) => p.classList.toggle("wire-lit", on));
+}
+
+function jumpToChip(callId) {
+  const chip = document.querySelector(`.tool-chip[data-call-id="${cssEscape(callId)}"]`);
+  if (!chip) return;
+  setWireLit(callId, true);
+  chip.classList.add("wire-lit", "wire-lit-chip");
+  chip.scrollIntoView({ behavior: "smooth", block: "center" });
+  setTimeout(() => {
+    setWireLit(callId, false);
+    chip.classList.remove("wire-lit", "wire-lit-chip");
+  }, 1600);
 }
 
 function cssEscape(value) {
@@ -893,15 +915,16 @@ function renderInspector() {
     card.dataset.callId = call.call_id;
     const color = wireColor(call.call_id);
     card.innerHTML = `
-      <div class="flex items-center gap-2 px-3 pt-2.5">
+      <button class="flex w-full items-center gap-2 px-3 pt-2.5 text-left">
         <span class="h-1.5 w-1.5 shrink-0 rounded-full" style="background:${color}"></span>
         <p class="truncate font-mono text-xs font-semibold text-slate-700" title="${escapeHTML(call.name)}">${escapeHTML(call.name)}</p>
         <span class="ml-auto shrink-0 text-[10px] text-slate-300">#${index + 1}</span>
-      </div>
+      </button>
       <div class="px-3 pb-2.5 pt-1">
         ${toolSection("Arguments", formatPayload(call.arguments), latest)}
         ${toolSection(isError ? "Error" : "Result", formatPayload(call.result_parsed ?? call.result), latest && !isError)}
       </div>`;
+    card.querySelector("button").addEventListener("click", () => jumpToChip(call.call_id));
     toolCallsEl.appendChild(card);
   });
   toolCallsEl.scrollTop = toolCallsEl.scrollHeight;
