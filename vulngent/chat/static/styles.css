@@ -266,3 +266,45 @@ details.thoughts summary::-webkit-details-marker {
 .chat-popover {
   animation: pop-in 0.15s ease-out both;
 }
+
+/* ==== Agent companion physics ==== */
+#agent-cursor.agent-spring {
+  transition: transform 0.85s cubic-bezier(0.18, 1.5, 0.32, 1);
+}
+#agent-cursor.agent-follow {
+  transition: transform 0.4s cubic-bezier(0.25, 1.35, 0.4, 1);
+}
+#agent-cursor.agent-moving {
+  transform-origin: center;
+  animation: agent-wobble 0.85s ease-in-out;
+}
+@keyframes agent-wobble {
+  0%,
+  100% {
+    scale: 1 1;
+  }
+  25% {
+    scale: 1.25 0.75;
+  }
+  55% {
+    scale: 0.85 1.2;
+  }
+  80% {
+    scale: 1.08 0.94;
+  }
+}
+
+/* Indigo ring pulsing around the bubble the agent is streaming into */
+@keyframes agent-ring {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1.5px rgba(79, 70, 229, 0.55), 0 0 14px rgba(79, 70, 229, 0.18);
+  }
+  50% {
+    box-shadow: 0 0 0 2.5px rgba(79, 70, 229, 0.75), 0 0 22px rgba(79, 70, 229, 0.3);
+  }
+}
+.agent-active-bubble {
+  border-color: #818cf8 !important;
+  animation: agent-ring 1.8s ease-in-out infinite;
+}

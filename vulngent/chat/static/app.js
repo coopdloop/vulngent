@@ -64,6 +64,7 @@ function setView(view) {
   setSidebarOpen(false);
   if (view !== "dashboard") resetCursor();
   if (view === "dashboard") loadDashboard();
+  repositionAgent();
 }
 
 document.querySelectorAll(".nav-item[data-view]").forEach((btn) => {
@@ -247,8 +248,16 @@ function updateStatus(mode) {
   sendBtn.disabled = busy;
   if (mode === "thinking") {
     showTypingIndicator();
+    if (currentView === "chat") {
+      setAgentBubble(typingBubble);
+      setAgentAnchor("bubble", typingBubble);
+    }
   } else {
     removeTypingIndicator();
+    if (mode === "ready" || mode === "offline") {
+      clearAgentBubble();
+      setAgentAnchor("navbar");
+    }
   }
 }
 
@@ -315,7 +324,7 @@ function showTypingIndicator() {
   typingBubble.className = "chat-message flex items-start gap-2.5";
   typingBubble.innerHTML = `
     ${avatarSvg()}
-    <div class="flex items-center gap-1 rounded-2xl rounded-tl-sm border border-slate-200 bg-white px-3.5 py-2.5 shadow-sm">
+    <div class="agent-bubble flex items-center gap-1 rounded-2xl rounded-tl-sm border border-slate-200 bg-white px-3.5 py-2.5 shadow-sm">
       <span class="typing-dot"></span>
       <span class="typing-dot"></span>
       <span class="typing-dot"></span>
@@ -327,6 +336,37 @@ function removeTypingIndicator() {
   if (typingBubble) {
     typingBubble.remove();
     typingBubble = null;
+  }
+}
+
+// The indigo ring marking the bubble the agent is streaming into.
+function setAgentBubble(articleEl) {
+  clearAgentBubble();
+  if (!articleEl) return;
+  const bubble = articleEl.querySelector(".agent-bubble") || articleEl;
+  bubble.classList.add("agent-active-bubble");
+}
+function clearAgentBubble() {
+  document.querySelectorAll(".agent-active-bubble").forEach((el) => el.classList.remove("agent-active-bubble"));
+}
+
+// Where should the agent chip be right now?
+function repositionAgent() {
+  if (currentView === "chat") {
+    if (typingBubble) {
+      setAgentAnchor("bubble", typingBubble);
+    } else {
+      const last = historyEl.lastElementChild;
+      if (last && last.classList.contains("chat-message")) {
+        springAgentTo("bubble", last);
+      } else {
+        springAgentTo("navbar");
+      }
+    }
+  } else if (currentView === "dashboard") {
+    setAgentAnchor(null); // hand control to the mouse-follow handlers
+  } else {
+    springAgentTo("navbar");
   }
 }
 
@@ -398,10 +438,16 @@ function renderAgentMessage(entry) {
     bubble.appendChild(meta);
   }
 
+  bubble.classList.add("agent-bubble");
   wrapper.innerHTML = avatarSvg();
   wrapper.appendChild(bubble);
   historyEl.appendChild(wrapper);
   scrollToBottom();
+
+  if (currentView === "chat") {
+    setAgentBubble(wrapper);
+    springAgentTo("bubble", wrapper);
+  }
 
   updateInspector(entry.tool_calls ?? []);
 }
@@ -866,6 +912,20 @@ function spawnChat({ prompt, prefill, label }) {
 const agentCursorEl = document.getElementById("agent-cursor");
 const cursorMenuEl = document.getElementById("cursor-menu");
 const dashboardViewEl = document.getElementById("view-dashboard");
+const agentParkEl = document.getElementById("agent-park");
+
+window.addEventListener("resize", () => {
+  if (agentAnchor) cursorTarget = anchorPoint() || cursorTarget;
+});
+historyEl.addEventListener("scroll", () => {
+  if (agentAnchor === "bubble") {
+    const point = anchorPoint();
+    if (point) cursorTarget = point;
+  }
+});
+
+// The agent chip lives in the navbar until work pulls it elsewhere.
+setAgentAnchor("navbar");
 
 let cursorTarget = { x: 0, y: 0 };
 let cursorPos = { x: 0, y: 0 };
@@ -877,8 +937,12 @@ let hideTimer = null;
 let menuItem = null; // item the pinned menu refers to
 
 function cursorLoop() {
-  cursorPos.x += (cursorTarget.x - cursorPos.x) * 0.18;
-  cursorPos.y += (cursorTarget.y - cursorPos.y) * 0.18;
+  if (agentAnchor) {
+    const point = anchorPoint();
+    if (point) cursorTarget = point;
+  }
+  cursorPos.x += (cursorTarget.x - cursorPos.x) * agentLerpFactor;
+  cursorPos.y += (cursorTarget.y - cursorPos.y) * agentLerpFactor;
   agentCursorEl.style.transform = `translate3d(${cursorPos.x + 14}px, ${cursorPos.y + 14}px, 0)`;
   if (cursorActive) {
     cursorRafId = requestAnimationFrame(cursorLoop);
@@ -897,9 +961,61 @@ function startCursor(x, y) {
 
 function stopCursor() {
   cursorActive = false;
-  agentCursorEl.classList.add("hidden");
   if (cursorRafId) cancelAnimationFrame(cursorRafId);
   cursorRafId = null;
+}
+
+// --- Anchored movement: the agent springs/zips between parking spots ---
+let agentAnchor = null; // "navbar" | "bubble" | null (free mouse-follow)
+let agentBubbleEl = null;
+let agentLerpFactor = 0.18;
+
+function anchorPoint() {
+  if (agentAnchor === "navbar") {
+    const rect = agentParkEl.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2 - 26, y: rect.top + rect.height / 2 - 12 };
+  }
+  if (agentAnchor === "bubble" && agentBubbleEl && agentBubbleEl.isConnected) {
+    const rect = agentBubbleEl.getBoundingClientRect();
+    return { x: rect.left + 10, y: rect.top - 26 };
+  }
+  return null;
+}
+
+function setAgentAnchor(anchor, bubbleEl = null) {
+  if (agentAnchor === anchor && agentBubbleEl === bubbleEl) return;
+  agentAnchor = anchor;
+  agentBubbleEl = bubbleEl;
+  agentLerpFactor = 0.22; // tighter tracking for anchored targets
+  if (!cursorActive) {
+    const point = anchorPoint();
+    if (point) {
+      cursorPos = { ...point };
+      cursorTarget = { ...point };
+      cursorActive = true;
+      agentCursorEl.classList.remove("hidden");
+      cursorRafId = requestAnimationFrame(cursorLoop);
+    }
+  }
+}
+
+function springAgentTo(anchor, bubbleEl = null) {
+  // Long rubber-band zip to a far-away anchor (navbar <-> chat stream).
+  agentAnchor = anchor;
+  agentBubbleEl = bubbleEl;
+  agentLerpFactor = 0.075; // slow chase + snappy transition = elastic overshoot
+  agentCursorEl.classList.remove("agent-follow");
+  agentCursorEl.classList.add("agent-spring", "agent-moving");
+  if (!cursorActive) {
+    const point = anchorPoint();
+    if (point) {
+      cursorTarget = { ...point };
+      cursorActive = true;
+      agentCursorEl.classList.remove("hidden");
+      cursorRafId = requestAnimationFrame(cursorLoop);
+    }
+  }
+  setTimeout(() => agentCursorEl.classList.remove("agent-moving"), 900);
 }
 
 function parseItem(el) {
@@ -930,7 +1046,9 @@ function resetCursor() {
   dwellTimer = null;
   hoverItem = null;
   unpinCursorMenu();
+  agentAnchor = null;
   stopCursor();
+  agentCursorEl.classList.add("hidden");
 }
 
 dashboardViewEl.addEventListener("mouseover", (event) => {
@@ -948,6 +1066,10 @@ dashboardViewEl.addEventListener("mouseover", (event) => {
 
 dashboardViewEl.addEventListener("mousemove", (event) => {
   if (!event.target.closest(".dash-item")) return;
+  agentAnchor = null;
+  agentLerpFactor = 0.18;
+  agentCursorEl.classList.remove("agent-spring");
+  agentCursorEl.classList.add("agent-follow");
   cursorTarget = { x: event.clientX, y: event.clientY };
   if (!cursorActive) startCursor(event.clientX, event.clientY);
 });
