@@ -54,6 +54,11 @@ let agentLerpFactor = 0.18;
 let sectionPopover = null;
 let sectionDocListenerBound = false;
 
+// Streaming responses
+let streamBubble = null;
+let streamTextEl = null;
+let streamText = "";
+
 // ==== Views ====
 const VIEWS = {
   chat: { title: "Remediation Chat", subtitle: "Ask about assets, vulnerabilities, or plan actions." },
@@ -155,8 +160,18 @@ function handleSocketMessage(event) {
       break;
     case "agent_response":
       removeTypingIndicator();
-      renderAgentMessage(payload.entry);
+      if (streamBubble) {
+        finalizeStream(payload.entry);
+      } else {
+        renderAgentMessage(payload.entry);
+      }
       if (payload.session_usage) updateSessionUsage(payload.session_usage);
+      break;
+    case "stream_start":
+      startStreamBubble();
+      break;
+    case "stream_delta":
+      appendStreamDelta(payload.delta || "");
       break;
     case "tool_call_progress":
       appendToolCall(payload.call);
@@ -368,6 +383,47 @@ function setAgentBubble(articleEl) {
 }
 function clearAgentBubble() {
   document.querySelectorAll(".agent-active-bubble").forEach((el) => el.classList.remove("agent-active-bubble"));
+}
+
+// ==== Streaming responses ====
+function startStreamBubble() {
+  if (streamBubble) return;
+  hideEmptyState();
+  removeTypingIndicator();
+  streamText = "";
+  streamBubble = document.createElement("article");
+  streamBubble.className = "chat-message flex items-start gap-2.5";
+  streamBubble.innerHTML = `
+    ${avatarSvg()}
+    <div class="agent-bubble max-w-[80%] rounded-2xl rounded-tl-sm border border-slate-200 bg-white px-3.5 py-2.5 text-sm shadow-sm">
+      <div class="markdown stream-text"></div>
+    </div>`;
+  streamTextEl = streamBubble.querySelector(".stream-text");
+  historyEl.appendChild(streamBubble);
+  scrollToBottom();
+  setAgentBubble(streamBubble);
+  if (currentView === "chat") setAgentAnchor("bubble", streamBubble);
+}
+
+function appendStreamDelta(delta) {
+  if (!streamBubble) startStreamBubble();
+  streamText += delta;
+  streamTextEl.textContent = streamText;
+  scrollToBottom();
+  // Keep the agent chip riding the tail of the streamed text.
+  if (currentView === "chat" && agentAnchor === "bubble" && agentBubbleEl === streamBubble) {
+    const point = anchorPoint();
+    if (point) cursorTarget = point;
+  }
+}
+
+function finalizeStream(entry) {
+  const bubble = streamBubble;
+  streamBubble = null;
+  streamTextEl = null;
+  streamText = "";
+  if (bubble) bubble.remove(); // replaced by the authoritative rendered entry
+  renderAgentMessage(entry);
 }
 
 // Where should the agent chip be right now?

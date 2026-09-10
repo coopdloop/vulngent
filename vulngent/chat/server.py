@@ -340,6 +340,17 @@ class ChatSession:
         usage["input_tokens"] += models_usage.prompt_tokens
         usage["output_tokens"] += models_usage.completion_tokens
 
+    async def _stream_text(self, text: str, send_json: SendJSON, delay: float = 0.012) -> None:
+        """Typewriter-pump a complete TextMessage as deltas so the UI can stream it.
+
+        AutoGen emits whole messages (no token stream), so we synthesize deltas;
+        the final agent_response still carries the authoritative full text."""
+        await send_json({"type": "stream_start"})
+        size = 6
+        for i in range(0, len(text), size):
+            await send_json({"type": "stream_delta", "delta": text[i : i + size]})
+            await asyncio.sleep(delay)
+
     async def process_user_message(self, text: str, send_json: SendJSON) -> dict[str, Any]:
         tool_requests: list[Any] = []
         tool_calls: list[dict[str, Any]] = []
@@ -355,6 +366,7 @@ class ChatSession:
                     self._track_usage(event, usage)
                     if isinstance(event, TextMessage):
                         final_text = event.content
+                        await self._stream_text(final_text, send_json)
                     elif isinstance(event, ThoughtEvent):
                         thoughts.append(event.content)
                         await send_json({"type": "thought", "content": event.content})
@@ -430,6 +442,7 @@ class ChatSession:
             result_text, call_entry = await self._perform_write_tool(pending)
             self._confirmation_manager.clear()
             await send_json({"type": "tool_call_progress", "call": call_entry})
+            await self._stream_text(result_text, send_json)
             entry = {
                 "role": "assistant",
                 "message": result_text,
