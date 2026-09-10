@@ -62,6 +62,183 @@ def list_open_vulnerabilities(min_priority: float = 0.0) -> str:
     return json.dumps(out, indent=2)
 
 
+def list_overdue_vulnerabilities() -> str:
+    """List every overdue vulnerability (open or in-progress past its due date)."""
+    with get_session() as session:
+        vulns = repo.list_overdue_vulnerabilities(session)
+        out = [
+            {
+                "id": v.id,
+                "external_id": v.external_id,
+                "title": v.title,
+                "severity": v.severity.value,
+                "priority_score": v.priority_score,
+                "asset": v.asset.name if v.asset else None,
+                "days_overdue": repo.days_overdue(v),
+            }
+            for v in vulns
+        ]
+    return json.dumps(out, indent=2)
+
+
+def list_assets() -> str:
+    """Summarize every asset with its owner, repo, and high-priority outstanding issues."""
+    with get_session() as session:
+        assets = repo.list_assets(session)
+        out: list[dict[str, object | None]] = []
+        for asset in assets:
+            owner = asset.owner
+            open_vulns = [
+                v
+                for v in asset.vulnerabilities
+                if v.status in (VulnStatus.OPEN, VulnStatus.IN_PROGRESS)
+            ]
+            overdue_vulns = [v for v in open_vulns if repo.is_overdue(v)]
+            top_vulns = sorted(open_vulns, key=lambda v: v.priority_score or 0, reverse=True)[:3]
+            out.append(
+                {
+                    "name": asset.name,
+                    "repo_full_name": asset.repo_full_name,
+                    "environment": asset.environment,
+                    "criticality": asset.criticality,
+                    "owner": owner.name if owner else None,
+                    "owner_email": owner.email if owner else None,
+                    "owner_slack_id": owner.slack_user_id if owner else None,
+                    "open_vulnerability_count": len(open_vulns),
+                    "overdue_vulnerability_count": len(overdue_vulns),
+                    "top_vulnerabilities": [
+                        {
+                            "id": v.id,
+                            "external_id": v.external_id,
+                            "title": v.title,
+                            "severity": v.severity.value,
+                            "priority_score": v.priority_score,
+                            "days_overdue": repo.days_overdue(v),
+                        }
+                        for v in top_vulns
+                    ],
+                }
+            )
+    return json.dumps(out, indent=2)
+
+
+def list_vulnerabilities_by_filter(
+    severity: str | None = None,
+    status: str | None = None,
+    asset: str | None = None,
+    is_overdue: bool | None = None,
+    limit: int = 25,
+) -> str:
+    """List vulnerabilities matching severity/status/asset/is_overdue filters."""
+    severity_enum = None
+    if severity:
+        try:
+            severity_enum = Severity(severity)
+        except ValueError:
+            return f"ERROR: invalid severity '{severity}'."  # type: ignore[return-value]
+    status_enum = None
+    if status:
+        try:
+            status_enum = VulnStatus(status)
+        except ValueError:
+            return f"ERROR: invalid status '{status}'."  # type: ignore[return-value]
+    limit = max(1, limit)
+    with get_session() as session:
+        vulns = repo.search_vulnerabilities(
+            session,
+            severity=severity_enum,
+            status=status_enum,
+            asset_name=asset,
+            is_overdue=is_overdue,
+            limit=limit,
+        )
+        out = [
+            {
+                "id": v.id,
+                "external_id": v.external_id,
+                "title": v.title,
+                "severity": v.severity.value,
+                "status": v.status.value,
+                "priority_score": v.priority_score,
+                "asset": v.asset.name if v.asset else None,
+                "days_overdue": repo.days_overdue(v),
+            }
+            for v in vulns
+        ]
+    return json.dumps(out, indent=2)
+
+
+def get_asset_summary(asset_name: str) -> str:
+    """Summarize an asset: owner, open/in-progress vulnerabilities, and overdues."""
+    with get_session() as session:
+        asset = repo.find_asset_by_name(session, asset_name)
+        if not asset:
+            return f"ERROR: no asset named '{asset_name}'"
+        open_vulns: list[Vulnerability] = []
+        for status_value in (VulnStatus.OPEN, VulnStatus.IN_PROGRESS):
+            open_vulns.extend(
+                repo.search_vulnerabilities(session, status=status_value, asset_name=asset_name)
+            )
+        overdue_vulns = [v for v in open_vulns if repo.is_overdue(v)]
+        top_vulns = sorted(open_vulns, key=lambda v: v.priority_score or 0, reverse=True)[:5]
+        timeline_entries = [
+            {
+                "vulnerability_id": v.id,
+                "at": e.occurred_at.isoformat(),
+                "type": e.event_type,
+                "description": e.description,
+            }
+            for v in open_vulns
+            for e in v.timeline_events[-3:]
+        ]
+        timeline_entries.sort(key=lambda entry: entry["at"], reverse=True)
+        owner = asset.owner
+        summary = {
+            "name": asset.name,
+            "repo_full_name": asset.repo_full_name,
+            "environment": asset.environment,
+            "criticality": asset.criticality,
+            "owner": owner.name if owner else None,
+            "owner_email": owner.email if owner else None,
+            "owner_slack_id": owner.slack_user_id if owner else None,
+            "open_vulnerabilities": [
+                {
+                    "id": v.id,
+                    "external_id": v.external_id,
+                    "title": v.title,
+                    "severity": v.severity.value,
+                    "status": v.status.value,
+                    "priority_score": v.priority_score,
+                    "days_overdue": repo.days_overdue(v),
+                    "due_date": v.due_date.isoformat() if v.due_date else None,
+                }
+                for v in open_vulns
+            ],
+            "overdue_count": len(overdue_vulns),
+            "overdue_details": [
+                {
+                    "id": v.id,
+                    "external_id": v.external_id,
+                    "priority_score": v.priority_score,
+                    "days_overdue": repo.days_overdue(v),
+                }
+                for v in overdue_vulns
+            ],
+            "top_priorities": [
+                {
+                    "id": v.id,
+                    "external_id": v.external_id,
+                    "title": v.title,
+                    "priority_score": v.priority_score,
+                    "days_overdue": repo.days_overdue(v),
+                }
+                for v in top_vulns
+            ],
+            "recent_timeline": timeline_entries[:5],
+        }
+    return json.dumps(summary, indent=2)
+
+
 def find_low_hanging_fruit() -> str:
     """Find high-impact, easy wins: open vulnerabilities that are high/critical severity,
     confirmed reachable, and have no remediation steps recorded yet. These are the best
@@ -470,3 +647,16 @@ def generate_status_report() -> str:
             lines.append(f"- vuln #{c.vulnerability_id}: {c.description} (due {c.committed_date.date()})")
         report = "\n".join(lines)
     return report
+
+
+def suggest_report(report_format: str = "pdf", reason: str = "") -> str:
+    """Suggest generating a shareable status report artifact (formats: md, pdf, docx).
+    Call this when a report would help the user (e.g. a leadership update or team
+    handoff) instead of pasting a long report into chat; the UI shows a one-click
+    generate button. `reason` is shown to the user, so keep it short and specific."""
+    from vulngent.reporting import SUPPORTED_FORMATS
+
+    fmt = report_format.lower().strip()
+    if fmt not in SUPPORTED_FORMATS:
+        fmt = "pdf"
+    return f"Report suggestion ({fmt}) shown to the user."

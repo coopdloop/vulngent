@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from vulngent.db.models import (
@@ -88,6 +88,48 @@ def find_asset_by_name(session: Session, name: str) -> Asset | None:
 
 def set_asset_repo(session: Session, asset: Asset, repo_full_name: str) -> None:
     asset.repo_full_name = repo_full_name
+
+
+def list_assets(session: Session) -> list[Asset]:
+    """Return every asset alphabetically with its owner overviews."""
+    stmt = select(Asset).order_by(Asset.name)
+    return list(session.execute(stmt).scalars().all())
+
+
+def search_vulnerabilities(
+    session: Session,
+    *,
+    status: VulnStatus | None = None,
+    severity: Severity | None = None,
+    asset_name: str | None = None,
+    is_overdue: bool | None = None,
+    limit: int | None = None,
+) -> list[Vulnerability]:
+    stmt = select(Vulnerability)
+    if status is not None:
+        stmt = stmt.where(Vulnerability.status == status)
+    if severity is not None:
+        stmt = stmt.where(Vulnerability.severity == severity)
+    if asset_name:
+        asset = find_asset_by_name(session, asset_name)
+        if not asset:
+            return []
+        stmt = stmt.where(Vulnerability.asset_id == asset.id)
+    now = dt.datetime.now(dt.timezone.utc)
+    if is_overdue is True:
+        stmt = stmt.where(
+            Vulnerability.status.in_((VulnStatus.OPEN, VulnStatus.IN_PROGRESS)),
+            Vulnerability.due_date.is_not(None),
+            Vulnerability.due_date < now,
+        )
+    elif is_overdue is False:
+        stmt = stmt.where(
+            or_(Vulnerability.due_date.is_(None), Vulnerability.due_date >= now)
+        )
+    stmt = stmt.order_by(Vulnerability.priority_score.desc().nulls_last())
+    if limit:
+        stmt = stmt.limit(limit)
+    return list(session.execute(stmt).scalars().all())
 
 
 # --- Vulnerabilities ---------------------------------------------------

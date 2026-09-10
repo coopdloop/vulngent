@@ -195,6 +195,27 @@ def report(
         console.print(rendered, markup=False)
 
 
+@app.command()
+def chat(
+    host: str = typer.Option("127.0.0.1", "--host", help="Host for the FastAPI chat server."),
+    port: int = typer.Option(7860, "--port", "-p", help="Port for the web UI."),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open a browser after startup."),
+    reload: bool = typer.Option(False, "--reload", help="Enable uvicorn auto-reload for development."),
+) -> None:
+    """Start the conversational chat UI backed by FastAPI."""
+    from vulngent.chat.server import app as chat_app
+
+    init_db()
+    console.print(f"[green]Launching vulngent chat at http://{host}:{port}/[/green]")
+    if open_browser:
+        import webbrowser
+
+        webbrowser.open(f"http://{host}:{port}/")
+    import uvicorn
+
+    uvicorn.run(chat_app, host=host, port=port, reload=reload)
+
+
 @app.command("run-cycle")
 def run_cycle(model: str = typer.Option(None, help="Override the OpenRouter model id.")) -> None:
     """Run one full triage -> outreach -> tracking cycle with the agent team."""

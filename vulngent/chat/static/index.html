@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>vulngent — Remediation Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+            mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+          },
+        },
+      },
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body class="h-screen overflow-hidden bg-neutral-50 font-sans text-slate-800 antialiased">
+  <div class="flex h-full">
+    <!-- ============ Left sidebar ============ -->
+    <aside
+      id="sidebar"
+      class="fixed inset-y-0 left-0 z-30 hidden w-64 -translate-x-full flex-col border-r border-slate-200 bg-white transition-transform duration-200 lg:static lg:flex lg:translate-x-0"
+    >
+      <!-- Brand -->
+      <div class="flex h-14 items-center gap-2.5 border-b border-slate-200 px-4">
+        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          </svg>
+        </div>
+        <div class="leading-tight">
+          <p class="text-sm font-semibold">vulngent</p>
+          <p class="text-[11px] text-slate-400">Remediation Console</p>
+        </div>
+      </div>
+
+      <!-- Nav -->
+      <nav class="space-y-0.5 px-3 pt-3">
+        <button data-view="chat" class="nav-item flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+          Chat
+        </button>
+        <button data-view="dashboard" class="nav-item flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="9" /><rect x="14" y="3" width="7" height="5" /><rect x="14" y="12" width="7" height="9" /><rect x="3" y="16" width="7" height="5" />
+          </svg>
+          Dashboard
+        </button>
+        <button data-view="reports" class="nav-item flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" />
+          </svg>
+          Reports
+        </button>
+      </nav>
+
+      <!-- Quick prompts -->
+      <div class="mt-6 px-3">
+        <p class="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Quick prompts</p>
+        <div class="space-y-0.5">
+          <button data-prompt="Show me the top 5 highest-priority criticals." class="quick-btn flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-600 hover:bg-slate-100">
+            <svg class="shrink-0 text-slate-400" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
+            Top criticals
+          </button>
+          <button data-prompt="Are there any overdue vulnerabilities on the billing-service asset?" class="quick-btn flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-600 hover:bg-slate-100">
+            <svg class="shrink-0 text-slate-400" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+            Overdue billing
+          </button>
+          <button data-prompt="Generate a status report." class="quick-btn flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-600 hover:bg-slate-100">
+            <svg class="shrink-0 text-slate-400" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10" /><line x1="18" y1="20" x2="18" y2="4" /><line x1="6" y1="20" x2="6" y2="16" /></svg>
+            Status report
+          </button>
+        </div>
+      </div>
+
+      <!-- Footer: runtime + usage -->
+      <div class="mt-auto border-t border-slate-200 p-3">
+        <div class="rounded-lg bg-slate-50 p-3">
+          <p class="text-xs font-medium text-slate-600">Agent runtime</p>
+          <p id="runtime-model" class="mt-0.5 truncate font-mono text-[11px] text-slate-400" title="Model">—</p>
+          <div class="mt-2 flex items-center gap-3 border-t border-slate-200/70 pt-2 text-[11px] text-slate-400">
+            <span title="Input tokens this session"><span id="usage-in" class="font-semibold text-slate-600">0</span> in</span>
+            <span title="Output tokens this session"><span id="usage-out" class="font-semibold text-slate-600">0</span> out</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+    <div id="sidebar-backdrop" class="fixed inset-0 z-20 hidden bg-slate-900/30 lg:hidden"></div>
+
+    <!-- ============ Main column ============ -->
+    <main class="flex min-w-0 flex-1 flex-col">
+      <!-- Header -->
+      <header class="flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4 lg:px-6">
+        <button id="sidebar-toggle" class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 lg:hidden" title="Menu">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="18" x2="21" y2="18" /></svg>
+        </button>
+        <div class="min-w-0">
+          <h1 id="view-title" class="truncate text-sm font-semibold">Remediation Chat</h1>
+          <p id="view-subtitle" class="truncate text-[11px] text-slate-400">Ask about assets, vulnerabilities, or plan actions.</p>
+        </div>
+        <div class="ml-auto flex items-center gap-2">
+          <span id="session-badge" class="hidden cursor-pointer rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[10px] text-slate-500 transition hover:bg-slate-100 sm:inline-block" title="Session ID — click to copy">—</span>
+          <button id="new-chat-btn" class="chat-only rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100" title="Start a new chat session">New chat</button>
+          <span class="hidden rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 sm:inline-block">Preview</span>
+          <span id="socket-status" class="status-pill inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-500">
+            <span class="status-dot h-1.5 w-1.5 rounded-full bg-slate-300"></span>
+            <span id="socket-status-text">Connecting…</span>
+          </span>
+          <button id="inspector-toggle" class="chat-only rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-100" title="Toggle inspector">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="15" y1="3" x2="15" y2="21" /></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- ===== Chat view ===== -->
+      <section id="view-chat" class="flex min-h-0 flex-1 flex-col">
+        <div class="relative min-h-0 flex-1">
+          <div id="history" class="nice-scroll h-full overflow-y-auto px-4 py-6 lg:px-8"></div>
+          <div id="empty-state" class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
+            <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-500">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
+            </div>
+            <div>
+              <p class="text-sm font-semibold text-slate-600">How can I help?</p>
+              <p class="mt-1 text-xs text-slate-400">Ask about open vulnerabilities, assets, or kick off a remediation plan.</p>
+            </div>
+          </div>
+        </div>
+        <div class="shrink-0 border-t border-slate-200 bg-white px-4 pb-4 pt-3 lg:px-8">
+          <div class="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-slate-300 bg-white p-2 shadow-sm transition focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100">
+            <textarea
+              id="chat-input"
+              rows="1"
+              placeholder="Ask about vulnerabilities, or plan an action…"
+              class="nice-scroll max-h-40 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-slate-400"
+            ></textarea>
+            <button
+              id="send-btn"
+              class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+              title="Send"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
+            </button>
+          </div>
+          <p class="mx-auto mt-1.5 max-w-3xl text-[10px] text-slate-400">Enter to send · Shift+Enter for a new line</p>
+        </div>
+      </section>
+
+      <!-- ===== Dashboard view ===== -->
+      <section id="view-dashboard" class="nice-scroll hidden min-h-0 flex-1 overflow-y-auto px-4 py-6 lg:px-8">
+        <div class="mx-auto max-w-4xl space-y-6">
+          <div class="flex items-center justify-between">
+            <p id="dashboard-updated" class="text-xs text-slate-400">Loading…</p>
+            <button id="dashboard-refresh" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100">Refresh</button>
+          </div>
+          <div id="dashboard-kpis" class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6"></div>
+          <div class="rounded-2xl border border-slate-200 bg-white p-4">
+            <h3 class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Open + in-progress by severity</h3>
+            <div id="dashboard-severity" class="mt-3 space-y-2.5"></div>
+          </div>
+          <div class="grid gap-6 lg:grid-cols-2">
+            <div class="rounded-2xl border border-slate-200 bg-white p-4">
+              <h3 class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Top priority</h3>
+              <div id="dashboard-top" class="mt-2 divide-y divide-slate-100"></div>
+            </div>
+            <div class="rounded-2xl border border-slate-200 bg-white p-4">
+              <h3 class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Commitments due (7 days)</h3>
+              <div id="dashboard-commitments" class="mt-2 divide-y divide-slate-100"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Reports view ===== -->
+      <section id="view-reports" class="nice-scroll hidden min-h-0 flex-1 overflow-y-auto px-4 py-6 lg:px-8">
+        <div class="mx-auto max-w-4xl space-y-6">
+          <div class="grid gap-3 sm:grid-cols-3">
+            <article class="rounded-2xl border border-slate-200 bg-white p-4">
+              <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-500">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>
+              </div>
+              <h3 class="mt-3 text-sm font-semibold">Markdown snapshot</h3>
+              <p class="mt-1 text-xs leading-snug text-slate-400">Plain-text summary for chat, diffs, and pipelines.</p>
+              <button class="report-gen mt-3 w-full rounded-lg border border-slate-200 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50" data-format="md">Preview</button>
+            </article>
+            <article class="rounded-2xl border border-indigo-200 bg-white p-4 ring-1 ring-indigo-100">
+              <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-500">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /></svg>
+              </div>
+              <h3 class="mt-3 text-sm font-semibold">Executive PDF</h3>
+              <p class="mt-1 text-xs leading-snug text-slate-400">Branded, board-ready report with KPIs and findings.</p>
+              <button class="report-gen mt-3 w-full rounded-lg bg-indigo-600 py-1.5 text-xs font-medium text-white transition hover:bg-indigo-500" data-format="pdf">Download PDF</button>
+            </article>
+            <article class="rounded-2xl border border-slate-200 bg-white p-4">
+              <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-500">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+              </div>
+              <h3 class="mt-3 text-sm font-semibold">Editable DOCX</h3>
+              <p class="mt-1 text-xs leading-snug text-slate-400">For teams that edit reports before circulating.</p>
+              <button class="report-gen mt-3 w-full rounded-lg border border-slate-200 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50" data-format="docx">Download DOCX</button>
+            </article>
+          </div>
+          <p class="text-xs text-slate-400">Tip: ask the agent for a status summary — it can suggest the right report with a one-click generate button inline in chat.</p>
+          <div id="report-preview-wrap" class="hidden rounded-2xl border border-slate-200 bg-white p-4">
+            <div class="flex items-center justify-between">
+              <h3 class="text-sm font-semibold">Markdown preview</h3>
+              <button id="report-preview-close" class="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100" title="Close preview">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+              </button>
+            </div>
+            <pre id="report-preview" class="nice-scroll mt-3 max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-600"></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ============ Right inspector ============ -->
+    <aside id="inspector" class="hidden w-80 shrink-0 flex-col border-l border-slate-200 bg-white lg:flex xl:w-96">
+      <div class="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 px-4">
+        <div class="flex items-center gap-2">
+          <h2 class="text-sm font-semibold">Tool Inspector</h2>
+          <span id="tool-count" class="hidden rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">0</span>
+        </div>
+        <button id="inspector-close" class="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 lg:hidden" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+        </button>
+      </div>
+      <div id="tool-calls" class="nice-scroll flex-1 space-y-3 overflow-y-auto p-4">
+        <div class="flex h-full flex-col items-center justify-center gap-2 text-center">
+          <svg class="text-slate-300" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>
+          <p class="text-xs text-slate-400">Tool calls and results will appear here.</p>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
