@@ -40,13 +40,6 @@ SYSTEM_PROMPT = dedent(
     pasting a long report into the chat.
 
     Keep replies concise and friendly, and output Markdown so the UI can render it nicely.
-
-    Structure every substantive reply into labeled sections. Wrap each section like this:
-      [SECTION:key] ...markdown content... [/SECTION]
-    Use short snake_case keys that describe the content (e.g. summary, findings, top_risks,
-    next_steps, plan, details). Pick keys that fit the reply; 2-5 sections is typical. The UI
-    uses these markers to let the analyst highlight a section and ask follow-ups about it, so
-    keep each section self-contained. Never mention the markers themselves in the prose.
     """
 ).strip().format(write_tools=", ".join(WRITE_TOOL_NAMES))
 
@@ -64,6 +57,41 @@ READ_ONLY_TOOLS = [
     plan_write_action,
 ]
 
+SECTION_FORMAT_INSTRUCTION = (
+    "Structure your reply into labeled sections so the UI can highlight them. Wrap each section exactly like:\n"
+    "[SECTION:key] ...markdown content... [/SECTION]\n"
+    "Use 2-5 short snake_case keys that fit the reply (e.g. summary, findings, top_risks, next_steps, plan, details). "
+    "Keep each section self-contained. Do not mention the markers in the prose."
+)
+
+
+class SectionedModelClient:
+    """Wraps a model client to append the section-format system instruction to the current turn.
+
+    AssistantAgent in autogen 0.7.5 builds llm_messages as system_messages + memory context;
+    there is no supported hook for a per-turn extra system message that stays memory-aware,
+    so we inject at the client boundary where the message list is already final."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def _inject(self, messages):
+        from autogen_core.models import SystemMessage
+
+        # Don't stack duplicates on retries within the same turn.
+        if any(isinstance(m, SystemMessage) and SECTION_FORMAT_INSTRUCTION[:40] in m.content for m in messages):
+            return messages
+        return list(messages) + [SystemMessage(content=SECTION_FORMAT_INSTRUCTION)]
+
+    async def create(self, messages, **kwargs):
+        return await self._inner.create(self._inject(messages), **kwargs)
+
+    def create_stream(self, messages, **kwargs):
+        return self._inner.create_stream(self._inject(messages), **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
 
 class ConversationalAgent:
     def __init__(self, model: str | None = None):
@@ -72,7 +100,7 @@ class ConversationalAgent:
         self.model_name = model or get_settings().openrouter_model
         self._agent = AssistantAgent(
             name="vulngent_conversational",
-            model_client=build_model_client(model),
+            model_client=SectionedModelClient(build_model_client(model)),
             system_message=SYSTEM_PROMPT,
             tools=READ_ONLY_TOOLS,
             reflect_on_tool_use=True,
