@@ -62,6 +62,7 @@ function setView(view) {
   });
   applyInspectorVisibility();
   setSidebarOpen(false);
+  if (view !== "dashboard") resetCursor();
   if (view === "dashboard") loadDashboard();
 }
 
@@ -122,6 +123,9 @@ function handleSocketMessage(event) {
     case "session":
       handleNewSession(payload);
       break;
+    case "history":
+      renderHistory(payload.entries ?? []);
+      break;
     case "agent_response":
       removeTypingIndicator();
       renderAgentMessage(payload.entry);
@@ -151,6 +155,8 @@ function handleSocketMessage(event) {
 }
 
 // ==== Session ====
+let pendingSpawn = null; // { prompt?: string, prefill?: string, label?: string }
+
 function handleNewSession(payload) {
   sessionId = payload.session_id;
   modelName = payload.model;
@@ -164,6 +170,31 @@ function handleNewSession(payload) {
   renderInspector();
   updateSessionUsage({ input_tokens: 0, output_tokens: 0 });
   restoreEmptyState();
+  loadSessions();
+  // A dashboard action asked us to seed this fresh session.
+  if (pendingSpawn) {
+    const spawn = pendingSpawn;
+    pendingSpawn = null;
+    if (spawn.prefill) {
+      setView("chat");
+      inputEl.value = spawn.prefill;
+      autogrowInput();
+      inputEl.focus();
+    } else if (spawn.prompt) {
+      appendUserMessage(spawn.prompt);
+      socket.send(JSON.stringify({ type: "user_message", text: spawn.prompt }));
+    }
+  }
+}
+
+function renderHistory(entries) {
+  for (const entry of entries) {
+    if (entry.role === "user") {
+      appendUserMessage(entry.message || "");
+    } else {
+      renderAgentMessage(entry);
+    }
+  }
 }
 
 sessionBadgeEl.addEventListener("click", async () => {
@@ -592,13 +623,14 @@ function renderDashboard(data) {
     ? data.top_vulns
         .map(
           (v) => `
-        <div class="flex items-center gap-2.5 py-2.5">
+        <div class="dash-item flex items-center gap-2.5 rounded-lg px-2 py-2.5" data-item='${escapeHTML(JSON.stringify({ external_id: v.external_id, title: v.title, asset: v.asset }))}'>
           <span class="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase text-white" style="background:${SEVERITY_COLORS[v.severity] || "#64748B"}">${v.severity}</span>
           <div class="min-w-0 flex-1">
             <p class="truncate text-xs font-medium text-slate-700" title="${escapeHTML(v.title)}">${escapeHTML(v.title)}</p>
             <p class="truncate font-mono text-[10px] text-slate-400">${escapeHTML(v.external_id)}${v.asset ? ` · ${escapeHTML(v.asset)}` : ""}</p>
           </div>
           ${v.days_overdue != null ? `<span class="shrink-0 rounded-full bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">${v.days_overdue}d late</span>` : ""}
+          ${chatsBadge(v.chats)}
           <span class="shrink-0 text-xs font-semibold text-slate-500">${v.priority_score != null ? v.priority_score.toFixed(1) : "—"}</span>
         </div>`
         )
@@ -609,9 +641,12 @@ function renderDashboard(data) {
     ? data.commitments_due
         .map(
           (c) => `
-        <div class="py-2.5">
-          <p class="text-xs font-medium text-slate-700">${escapeHTML(c.description)}</p>
-          <p class="mt-0.5 font-mono text-[10px] text-slate-400">${escapeHTML(c.external_id)} · due ${escapeHTML(c.due_date)} · ${escapeHTML(c.status)}</p>
+        <div class="dash-item flex items-center gap-2.5 rounded-lg px-2 py-2.5" data-item='${escapeHTML(JSON.stringify({ external_id: c.external_id, title: c.description, asset: null }))}'>
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-xs font-medium text-slate-700">${escapeHTML(c.description)}</p>
+            <p class="mt-0.5 font-mono text-[10px] text-slate-400">${escapeHTML(c.external_id)} · due ${escapeHTML(c.due_date)} · ${escapeHTML(c.status)}</p>
+          </div>
+          ${chatsBadge(c.chats)}
         </div>`
         )
         .join("")
@@ -712,3 +747,297 @@ function escapeHTML(str) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+// ==== Session list (sidebar) ====
+const chatListEl = document.getElementById("chat-list");
+
+async function loadSessions() {
+  try {
+    const res = await fetch("/api/sessions");
+    if (!res.ok) return;
+    renderSessionList((await res.json()).sessions || []);
+  } catch (err) {
+    /* ignore */
+  }
+}
+
+function renderSessionList(sessions) {
+  if (!sessions.length) {
+    chatListEl.innerHTML = '<p class="px-3 py-2 text-xs text-slate-400">No previous chats yet.</p>';
+    return;
+  }
+  chatListEl.innerHTML = "";
+  sessions.forEach((s) => {
+    const btn = document.createElement("button");
+    const active = s.id === sessionId;
+    btn.className = `flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left text-xs transition ${
+      active ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-100"
+    }`;
+    btn.innerHTML = `
+      <svg class="mt-0.5 shrink-0 ${active ? "text-indigo-400" : "text-slate-300"}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+      <span class="min-w-0 flex-1">
+        <span class="block truncate font-medium">${escapeHTML(s.title)}</span>
+        <span class="mt-0.5 block font-mono text-[10px] ${active ? "text-indigo-400" : "text-slate-400"}">${s.id} · ${timeAgo(s.updated_at)} · ${s.message_count} msg</span>
+      </span>`;
+    btn.title = `Resume chat ${s.id}`;
+    btn.addEventListener("click", () => resumeChat(s.id));
+    chatListEl.appendChild(btn);
+  });
+}
+
+function timeAgo(iso) {
+  if (!iso) return "—";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "—";
+  const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function resumeChat(id) {
+  if (!socket || socket.readyState !== WebSocket.OPEN || id === sessionId) {
+    if (id === sessionId) setView("chat");
+    return;
+  }
+  socket.send(JSON.stringify({ type: "resume_session", session_id: id }));
+  setView("chat");
+}
+
+// ==== Toasts ====
+const toastsEl = document.getElementById("toasts");
+
+function showToast({ title, body, actionLabel, onAction }) {
+  const toast = document.createElement("div");
+  toast.className = "toast rounded-xl border border-slate-200 bg-white p-3.5 shadow-lg";
+  toast.innerHTML = `
+    <div class="flex items-start gap-2.5">
+      <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-500">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+      </span>
+      <div class="min-w-0 flex-1">
+        <p class="text-xs font-semibold text-slate-700">${escapeHTML(title)}</p>
+        ${body ? `<p class="mt-0.5 truncate text-[11px] text-slate-400">${escapeHTML(body)}</p>` : ""}
+        ${actionLabel ? `<button class="toast-action mt-2 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-indigo-500">${escapeHTML(actionLabel)}</button>` : ""}
+      </div>
+      <button class="toast-close shrink-0 rounded-md p-1 text-slate-300 hover:bg-slate-100 hover:text-slate-500">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+      </button>
+    </div>`;
+  const dismiss = () => toast.remove();
+  toast.querySelector(".toast-close").addEventListener("click", dismiss);
+  if (actionLabel && onAction) {
+    toast.querySelector(".toast-action").addEventListener("click", () => {
+      onAction();
+      dismiss();
+    });
+  }
+  toastsEl.appendChild(toast);
+  setTimeout(dismiss, 9000);
+}
+
+// ==== Spawn chats from the dashboard ====
+function spawnChat({ prompt, prefill, label }) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    showToast({ title: "Not connected", body: "Cannot start a chat right now." });
+    return;
+  }
+  pendingSpawn = { prompt, prefill };
+  socket.send(JSON.stringify({ type: "new_chat" }));
+  if (prompt) {
+    showToast({
+      title: label || "New chat started",
+      body: prompt,
+      actionLabel: "Jump to chat",
+      onAction: () => {
+        setView("chat");
+        scrollToBottom();
+      },
+    });
+  }
+}
+
+// ==== Agent cursor + hover menu on dashboard items ====
+const agentCursorEl = document.getElementById("agent-cursor");
+const cursorMenuEl = document.getElementById("cursor-menu");
+const dashboardViewEl = document.getElementById("view-dashboard");
+
+let cursorTarget = { x: 0, y: 0 };
+let cursorPos = { x: 0, y: 0 };
+let cursorActive = false;
+let cursorRafId = null;
+let hoverItem = null; // .dash-item element being hovered
+let dwellTimer = null;
+let hideTimer = null;
+let menuItem = null; // item the pinned menu refers to
+
+function cursorLoop() {
+  cursorPos.x += (cursorTarget.x - cursorPos.x) * 0.18;
+  cursorPos.y += (cursorTarget.y - cursorPos.y) * 0.18;
+  agentCursorEl.style.transform = `translate3d(${cursorPos.x + 14}px, ${cursorPos.y + 14}px, 0)`;
+  if (cursorActive) {
+    cursorRafId = requestAnimationFrame(cursorLoop);
+  }
+}
+
+function startCursor(x, y) {
+  cursorPos = { x, y };
+  cursorTarget = { x, y };
+  if (!cursorActive) {
+    cursorActive = true;
+    agentCursorEl.classList.remove("hidden");
+    cursorRafId = requestAnimationFrame(cursorLoop);
+  }
+}
+
+function stopCursor() {
+  cursorActive = false;
+  agentCursorEl.classList.add("hidden");
+  if (cursorRafId) cancelAnimationFrame(cursorRafId);
+  cursorRafId = null;
+}
+
+function parseItem(el) {
+  try {
+    return JSON.parse(el.dataset.item || "{}");
+  } catch (err) {
+    return {};
+  }
+}
+
+function pinCursorMenu(itemEl) {
+  menuItem = itemEl;
+  const x = Math.min(cursorPos.x + 18, window.innerWidth - 200);
+  const y = Math.min(cursorPos.y + 18, window.innerHeight - 180);
+  cursorMenuEl.style.left = `${x}px`;
+  cursorMenuEl.style.top = `${y}px`;
+  cursorMenuEl.classList.remove("hidden");
+}
+
+function unpinCursorMenu() {
+  menuItem = null;
+  cursorMenuEl.classList.add("hidden");
+}
+
+function resetCursor() {
+  clearTimeout(dwellTimer);
+  clearTimeout(hideTimer);
+  dwellTimer = null;
+  hoverItem = null;
+  unpinCursorMenu();
+  stopCursor();
+}
+
+dashboardViewEl.addEventListener("mouseover", (event) => {
+  const item = event.target.closest(".dash-item");
+  if (!item) return;
+  if (hoverItem === item) return;
+  clearTimeout(hideTimer);
+  clearTimeout(dwellTimer);
+  if (menuItem && menuItem !== item) unpinCursorMenu();
+  hoverItem = item;
+  dwellTimer = setTimeout(() => {
+    if (hoverItem === item) pinCursorMenu(item);
+  }, 350);
+});
+
+dashboardViewEl.addEventListener("mousemove", (event) => {
+  if (!event.target.closest(".dash-item")) return;
+  cursorTarget = { x: event.clientX, y: event.clientY };
+  if (!cursorActive) startCursor(event.clientX, event.clientY);
+});
+
+dashboardViewEl.addEventListener("mouseout", (event) => {
+  const item = event.target.closest(".dash-item");
+  if (!item) return;
+  const to = event.relatedTarget;
+  if (to && (item.contains(to) || cursorMenuEl.contains(to))) return;
+  clearTimeout(dwellTimer);
+  hoverItem = null;
+  hideTimer = setTimeout(() => {
+    if (!hoverItem) resetCursor();
+  }, 200);
+});
+
+cursorMenuEl.addEventListener("mouseleave", () => {
+  hideTimer = setTimeout(() => resetCursor(), 200);
+});
+cursorMenuEl.addEventListener("mouseenter", () => clearTimeout(hideTimer));
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") resetCursor();
+});
+
+cursorMenuEl.querySelectorAll(".cursor-option").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (!menuItem) return;
+    const item = parseItem(menuItem);
+    const action = btn.dataset.action;
+    resetCursor();
+    const ref = item.external_id ? `${item.external_id} (${item.title})` : item.title;
+    const where = item.asset ? ` on asset ${item.asset}` : "";
+    if (action === "explain") {
+      spawnChat({ label: `Explain ${item.external_id || item.title}`, prompt: `Explain ${ref}${where}: what it is, its impact, and remediation options.` });
+    } else if (action === "report") {
+      spawnChat({ label: `Report: ${item.external_id || item.title}`, prompt: `Draft a status update for ${ref}${where} — current status, priority, and next steps. Suggest a report artifact if one would help.` });
+    } else if (action === "help") {
+      spawnChat({ label: `Help: ${item.external_id || item.title}`, prompt: `I need help with ${ref}${where}. What is the recommended next step?` });
+    } else if (action === "other") {
+      spawnChat({ prefill: `About ${ref}: ` });
+    }
+  });
+});
+
+// ==== Mention badges -> chat popover ====
+let openPopover = null;
+
+function chatsBadge(chats) {
+  if (!chats || !chats.length) return "";
+  return `
+    <button class="chats-badge inline-flex shrink-0 items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-600 transition hover:bg-indigo-100" data-chats='${escapeHTML(JSON.stringify(chats))}' title="Referenced in ${chats.length} chat${chats.length > 1 ? "s" : ""}">
+      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+      ${chats.length}
+    </button>`;
+}
+
+document.addEventListener("click", (event) => {
+  const badge = event.target.closest(".chats-badge");
+  if (openPopover && (!badge || badge._popover !== openPopover)) {
+    openPopover.remove();
+    openPopover = null;
+  }
+  if (!badge) return;
+  event.stopPropagation();
+  let chats = [];
+  try {
+    chats = JSON.parse(badge.dataset.chats || "[]");
+  } catch (err) {
+    return;
+  }
+  const pop = document.createElement("div");
+  pop.className = "chat-popover absolute z-50 w-56 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl";
+  pop.innerHTML = chats
+    .map(
+      (c) => `
+      <button class="popover-chat flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left hover:bg-indigo-50" data-id="${escapeHTML(c.id)}">
+        <span class="truncate text-xs font-medium text-slate-700">${escapeHTML(c.title)}</span>
+        <span class="font-mono text-[10px] text-slate-400">${escapeHTML(c.id)}</span>
+      </button>`
+    )
+    .join("");
+  document.body.appendChild(pop);
+  const rect = badge.getBoundingClientRect();
+  pop.style.left = `${Math.min(rect.left, window.innerWidth - 240)}px`;
+  pop.style.top = `${rect.bottom + 6 + window.scrollY}px`;
+  pop.querySelectorAll(".popover-chat").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      pop.remove();
+      openPopover = null;
+      resumeChat(btn.dataset.id);
+    });
+  });
+  badge._popover = pop;
+  openPopover = pop;
+});

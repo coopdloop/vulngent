@@ -22,8 +22,10 @@ from fastapi.staticfiles import StaticFiles
 from vulngent.agents import tools as agent_tools
 from vulngent.agents.conversational import ConversationalAgent
 from vulngent.chat.confirmation import ConfirmationManager, PendingAction, use_confirmation_manager
+from sqlalchemy import select
+
 from vulngent.db import repository as repo
-from vulngent.db.models import VulnStatus
+from vulngent.db.models import ChatMention, ChatMessage, ChatThread, Vulnerability, VulnStatus
 from vulngent.db.session import get_session
 from vulngent.report_data import collect_report_data
 from vulngent.reporting import SUPPORTED_FORMATS, render_report
@@ -67,6 +69,29 @@ async def homepage() -> FileResponse:
     return FileResponse(INDEX_HTML)
 
 
+@app.get("/api/sessions")
+async def list_chat_sessions() -> dict[str, Any]:
+    return await asyncio.to_thread(_collect_sessions)
+
+
+def _collect_sessions() -> dict[str, Any]:
+    with get_session() as session:
+        threads = session.execute(select(ChatThread).order_by(ChatThread.updated_at.desc()).limit(50)).scalars().all()
+        return {
+            "sessions": [
+                {
+                    "id": t.id,
+                    "title": t.title or t.id,
+                    "model": t.model,
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                    "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+                    "message_count": len(t.messages),
+                }
+                for t in threads
+            ]
+        }
+
+
 @app.get("/api/dashboard")
 async def dashboard() -> dict[str, Any]:
     return await asyncio.to_thread(_collect_dashboard)
@@ -85,6 +110,18 @@ def _collect_dashboard() -> dict[str, Any]:
         for v in actionable:
             by_severity[v.severity.value] = by_severity.get(v.severity.value, 0) + 1
         top = sorted(actionable, key=lambda v: v.priority_score or 0, reverse=True)[:8]
+
+        # vuln_id -> chats that have referenced it (deduped by thread)
+        thread_titles = {t.id: (t.title or t.id) for t in session.execute(select(ChatThread)).scalars().all()}
+        chats_by_vuln: dict[int, list[dict[str, str]]] = {}
+        seen: set[tuple[int, str]] = set()
+        for m in session.execute(select(ChatMention)).scalars().all():
+            if (m.vulnerability_id, m.thread_id) in seen:
+                continue
+            seen.add((m.vulnerability_id, m.thread_id))
+            chats_by_vuln.setdefault(m.vulnerability_id, []).append(
+                {"id": m.thread_id, "title": thread_titles.get(m.thread_id, m.thread_id)}
+            )
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "counts": {
@@ -106,6 +143,7 @@ def _collect_dashboard() -> dict[str, Any]:
                     "priority_score": v.priority_score,
                     "asset": v.asset.name if v.asset else None,
                     "days_overdue": repo.days_overdue(v),
+                    "chats": chats_by_vuln.get(v.id, []),
                 }
                 for v in top
             ],
@@ -116,6 +154,7 @@ def _collect_dashboard() -> dict[str, Any]:
                     "description": c.description,
                     "due_date": c.committed_date.date().isoformat(),
                     "status": c.status.value,
+                    "chats": chats_by_vuln.get(c.vulnerability_id, []),
                 }
                 for c in due_soon
             ],
@@ -158,6 +197,8 @@ class ChatSession:
         self._lock = asyncio.Lock()
         self._confirmation_manager = ConfirmationManager()
         self.total_usage = {"input_tokens": 0, "output_tokens": 0}
+        self._mentioned_vuln_ids: set[int] = set()
+        self._pending_state_coro: Any = None
 
     @property
     def model_name(self) -> str:
@@ -173,6 +214,107 @@ class ChatSession:
         self.history.clear()
         self._confirmation_manager.clear()
         self.total_usage = {"input_tokens": 0, "output_tokens": 0}
+        self._mentioned_vuln_ids: set[int] = set()
+
+    # --- persistence -------------------------------------------------------
+
+    def load_thread(self, thread_id: str) -> list[dict[str, Any]]:
+        """Restore a persisted thread: history for the UI + agent memory. Returns entries."""
+        self.reset()
+        with get_session() as session:
+            thread = session.get(ChatThread, thread_id)
+            if thread is None:
+                raise KeyError(thread_id)
+            self.session_id = thread.id
+            rows = session.execute(
+                select(ChatMessage).where(ChatMessage.thread_id == thread.id).order_by(ChatMessage.id)
+            ).scalars().all()
+            entries = [json.loads(m.payload) for m in rows]
+            self.history = [e for e in entries if e.get("role") == "assistant"]
+            self._mentioned_vuln_ids = {
+                m.vulnerability_id
+                for m in session.execute(
+                    select(ChatMention).where(ChatMention.thread_id == thread.id)
+                ).scalars().all()
+            }
+        self.total_usage = {"input_tokens": 0, "output_tokens": 0}
+        return entries
+
+    async def restore_agent_state(self, thread_id: str) -> None:
+        with get_session() as session:
+            thread = session.get(ChatThread, thread_id)
+            agent_state = json.loads(thread.agent_state) if thread and thread.agent_state else None
+        if agent_state:
+            try:
+                await self.agent._agent.load_state(agent_state)
+            except Exception:
+                pass  # stale/incompatible state -> start with fresh memory but keep UI history
+
+    def persist_user_message(self, text: str) -> None:
+        entry = {"role": "user", "message": text, "timestamp": datetime.now(timezone.utc).isoformat()}
+        self._persist_message("user", entry, title=text)
+        self._record_mentions([text])
+
+    def persist_assistant_entry(self, entry: dict[str, Any]) -> None:
+        self._persist_message("assistant", entry)
+        texts = [entry.get("message") or ""]
+        for call in entry.get("tool_calls") or []:
+            texts.append(json.dumps(call.get("arguments"), default=str))
+            texts.append(str(call.get("result") or ""))
+        self._record_mentions(texts)
+        self._persist_agent_state()
+
+    def _persist_message(self, role: str, entry: dict[str, Any], title: str = "") -> None:
+        now = datetime.now(timezone.utc)
+        with get_session() as session:
+            thread = session.get(ChatThread, self.session_id)
+            if thread is None:
+                thread = ChatThread(id=self.session_id, model=self.model_name)
+                session.add(thread)
+            if not thread.title and title:
+                thread.title = title[:80]
+            thread.updated_at = now
+            session.add(ChatMessage(thread_id=self.session_id, role=role, payload=json.dumps(entry)))
+            session.commit()
+
+    def _persist_agent_state(self) -> None:
+        try:
+            state_coro = self.agent._agent.save_state()
+        except Exception:
+            return
+        self._pending_state_coro = state_coro
+
+    async def flush_agent_state(self) -> None:
+        coro = getattr(self, "_pending_state_coro", None)
+        if coro is None:
+            return
+        self._pending_state_coro = None
+        try:
+            state = await coro
+        except Exception:
+            return
+        with get_session() as session:
+            thread = session.get(ChatThread, self.session_id)
+            if thread is not None:
+                thread.agent_state = json.dumps(state)
+                session.commit()
+
+    def _record_mentions(self, texts: list[str]) -> None:
+        with get_session() as session:
+            vulns = session.execute(select(Vulnerability.id, Vulnerability.external_id)).all()
+            new_ids: set[int] = set()
+            for vid, ext_id in vulns:
+                if vid in self._mentioned_vuln_ids:
+                    continue
+                for text in texts:
+                    if text and (ext_id in text or f"#{vid}" in text):
+                        new_ids.add(vid)
+                        break
+            for vid in new_ids:
+                session.add(ChatMention(thread_id=self.session_id, vulnerability_id=vid))
+            if new_ids:
+                session.commit()
+        self._mentioned_vuln_ids |= new_ids
 
     @staticmethod
     def _track_usage(event: Any, usage: dict[str, int]) -> None:
@@ -238,6 +380,8 @@ class ChatSession:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self.history.append(entry)
+        self.persist_assistant_entry(entry)
+        await self.flush_agent_state()
         return entry
 
     async def handle_confirmation_response(self, decision: bool, send_json: SendJSON) -> None:
@@ -256,6 +400,8 @@ class ChatSession:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
                 self.history.append(entry)
+                self.persist_assistant_entry(entry)
+                await self.flush_agent_state()
                 self._confirmation_manager.clear()
                 await send_json({"type": "agent_response", "entry": entry})
                 await send_json({"type": "confirmation_cleared"})
@@ -275,6 +421,8 @@ class ChatSession:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             self.history.append(entry)
+            self.persist_assistant_entry(entry)
+            await self.flush_agent_state()
             await send_json({"type": "agent_response", "entry": entry})
             await send_json({"type": "confirmation_cleared"})
             await send_json({"type": "status", "status": "ready"})
@@ -358,6 +506,19 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 await websocket.send_json(_session_payload(session))
                 await websocket.send_json({"type": "status", "status": "ready"})
                 continue
+            if msg_type == "resume_session":
+                thread_id = str(payload.get("session_id") or "").strip()
+                async with session._lock:
+                    try:
+                        entries = session.load_thread(thread_id)
+                        await session.restore_agent_state(thread_id)
+                    except KeyError:
+                        await websocket.send_json({"type": "error", "message": f"Unknown chat session '{thread_id}'."})
+                        continue
+                await websocket.send_json(_session_payload(session))
+                await websocket.send_json({"type": "history", "entries": entries})
+                await websocket.send_json({"type": "status", "status": "ready"})
+                continue
             if msg_type == "confirmation_response":
                 decision = bool(payload.get("decision"))
                 await session.handle_confirmation_response(decision, websocket.send_json)
@@ -375,6 +536,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 await session.handle_confirmation_response(False, websocket.send_json)
                 continue
             await websocket.send_json({"type": "status", "status": "thinking"})
+            session.persist_user_message(text)
             entry = await session.process_user_message(text, websocket.send_json)
             await websocket.send_json({"type": "agent_response", "entry": entry, "session_usage": session.total_usage})
             await websocket.send_json({"type": "status", "status": "ready"})

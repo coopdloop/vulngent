@@ -214,3 +214,45 @@ class Commitment(Base):
 
     vulnerability: Mapped[Vulnerability] = relationship(back_populates="commitments")
     stakeholder: Mapped[Stakeholder | None] = relationship()
+
+
+class ChatThread(Base):
+    """A persisted chat session with the conversational agent."""
+
+    __tablename__ = "chat_threads"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    model: Mapped[str] = mapped_column(String(200), default="")
+    agent_state: Mapped[str] = mapped_column(Text, default="")  # JSON from AssistantAgent.save_state()
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    messages: Mapped[list["ChatMessage"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
+    mentions: Mapped[list["ChatMention"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    thread_id: Mapped[str] = mapped_column(ForeignKey("chat_threads.id"), index=True)
+    role: Mapped[str] = mapped_column(String(20))  # "user" | "assistant"
+    payload: Mapped[str] = mapped_column(Text)  # JSON entry as rendered by the UI
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    thread: Mapped[ChatThread] = relationship(back_populates="messages")
+
+
+class ChatMention(Base):
+    """Links a vulnerability referenced in a chat thread (in text or tool IO)."""
+
+    __tablename__ = "chat_mentions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    thread_id: Mapped[str] = mapped_column(ForeignKey("chat_threads.id"), index=True)
+    vulnerability_id: Mapped[int] = mapped_column(ForeignKey("vulnerabilities.id"), index=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    thread: Mapped[ChatThread] = relationship(back_populates="mentions")
+    vulnerability: Mapped[Vulnerability] = relationship()
