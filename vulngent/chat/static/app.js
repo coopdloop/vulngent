@@ -28,6 +28,8 @@ let sessionId = null;
 let modelName = null;
 let sessionUsage = { input_tokens: 0, output_tokens: 0 };
 let inspectorCalls = [];
+const INSPECTOR_KEY = "vulngent.inspector.collapsed";
+let inspectorCollapsed = localStorage.getItem(INSPECTOR_KEY) === "1";
 
 // ==== Views ====
 const VIEWS = {
@@ -69,9 +71,6 @@ document.querySelectorAll(".nav-item[data-view]").forEach((btn) => {
 setView("chat");
 
 // ==== Inspector panel ====
-const INSPECTOR_KEY = "vulngent.inspector.collapsed";
-let inspectorCollapsed = localStorage.getItem(INSPECTOR_KEY) === "1";
-
 function applyInspectorVisibility() {
   const hidden = inspectorCollapsed || currentView !== "chat";
   inspectorEl.classList.toggle("hidden", hidden);
