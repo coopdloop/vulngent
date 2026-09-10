@@ -91,7 +91,9 @@ def test_render_report_docx_produces_valid_docx_bytes(session: Session) -> None:
     assert isinstance(rendered, bytes)
     doc = Document(io.BytesIO(rendered))
     full_text = "\n".join(p.text for p in doc.paragraphs)
-    assert "Vulnerability Remediation Report" in full_text
+    # Title comes from REPORT_TITLE; assert against the collected branding, not a
+    # literal, so a customized local .env can't break the suite.
+    assert data.branding.title in full_text
 
     # KPI cards + findings + overdue tables; no commitments were seeded so that
     # section renders as a paragraph, not a table.

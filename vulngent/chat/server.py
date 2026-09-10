@@ -23,10 +23,12 @@ from fastapi.staticfiles import StaticFiles
 from vulngent.agents import tools as agent_tools
 from vulngent.agents.conversational import ConversationalAgent
 from vulngent.chat.confirmation import ConfirmationManager, PendingAction, use_confirmation_manager
+from vulngent.chat.settings_api import router as settings_router
 from sqlalchemy import select
 
+from vulngent.config import get_settings
 from vulngent.db import repository as repo
-from vulngent.db.models import ChatMention, ChatMessage, ChatThread, Vulnerability, VulnStatus
+from vulngent.db.models import Asset, ChatMention, ChatMessage, ChatThread, Vulnerability, VulnStatus
 from vulngent.db.session import get_session
 from vulngent.report_data import collect_report_data
 from vulngent.reporting import SUPPORTED_FORMATS, render_report
@@ -36,6 +38,7 @@ INDEX_HTML = STATIC_DIR / "index.html"
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(settings_router)
 
 WRITE_TOOL_REGISTRY: dict[str, Callable[..., str]] = {
     "create_github_issue_for_vuln": agent_tools.create_github_issue_for_vuln,
@@ -175,6 +178,30 @@ def _collect_dashboard() -> dict[str, Any]:
                 for c in due_soon
             ],
         }
+
+
+@app.get("/api/ui/actions")
+async def action_context() -> dict[str, Any]:
+    """Capabilities of hover-menu actions + repo mapping for contextual GitHub actions."""
+    return await asyncio.to_thread(_collect_action_context)
+
+
+def _collect_action_context() -> dict[str, Any]:
+    settings = get_settings()
+    with get_session() as session:
+        vulns = session.execute(select(Vulnerability.id, Vulnerability.external_id, Vulnerability.asset_id)).all()
+        repos = session.execute(select(Asset.id, Asset.repo_full_name).where(Asset.repo_full_name.isnot(None))).all()
+    repo_by_asset = {asset_id: repo for asset_id, repo in repos}
+    vuln_map = {
+        ext_id: repo_by_asset.get(asset_id)
+        for vuln_id, ext_id, asset_id in vulns
+        if repo_by_asset.get(asset_id)
+    }
+    return {
+        "slack": {"enabled": bool(settings.slack_bot_token), "default_channel": settings.slack_default_channel or ""},
+        "github": {"enabled": bool(settings.github_token)},
+        "vuln_repos": vuln_map,
+    }
 
 
 _REPORT_MEDIA_TYPES = {

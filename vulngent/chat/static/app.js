@@ -64,6 +64,7 @@ const VIEWS = {
   chat: { title: "Remediation Chat", subtitle: "Ask about assets, vulnerabilities, or plan actions." },
   dashboard: { title: "Dashboard", subtitle: "Ledger posture at a glance." },
   reports: { title: "Reports", subtitle: "Generate shareable status reports." },
+  settings: { title: "Settings", subtitle: "Environment, integrations, and report branding." },
 };
 let currentView = "chat";
 
@@ -92,6 +93,7 @@ function setView(view) {
   setSidebarOpen(false);
   resetCursor();
   if (view === "dashboard") loadDashboard();
+  if (view === "settings") loadSettings();
   repositionAgent();
 }
 
@@ -1207,8 +1209,113 @@ function parseItem(el) {
   }
 }
 
+// ==== Action context: which integrations can actually fire + vuln->repo map ====
+let actionCtx = { loaded: false, slack: false, github: false, vulnRepos: {} };
+
+async function loadActionContext() {
+  try {
+    const res = await fetch("/api/ui/actions");
+    if (!res.ok) return;
+    const data = await res.json();
+    actionCtx = {
+      loaded: true,
+      slack: Boolean(data.slack && data.slack.enabled),
+      github: Boolean(data.github && data.github.enabled),
+      vulnRepos: data.vuln_repos || {},
+    };
+  } catch (err) {
+    /* menu falls back to chat-only actions */
+  }
+}
+loadActionContext();
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) loadActionContext();
+});
+
+const MENU_ICONS = {
+  explain:
+    '<circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" />',
+  deepen:
+    '<polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />',
+  slack_msg: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />',
+  github_issue: '<circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="3.5" />',
+  github_link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />',
+  report:
+    '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />',
+  help:
+    '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><circle cx="12" cy="12" r="10" /><line x1="12" y1="17" x2="12.01" y2="17" />',
+  other: '<circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" />',
+};
+
+const CHAT_MSG_BASE = [
+  ["slack_msg", "Slack this"],
+  ["copy", "Copy"],
+  ["report", "Report on this"],
+  ["deepen", "Dig deeper"],
+  ["other", "Other…"],
+];
+
+function itemExternalIds(item) {
+  const ids = new Set();
+  if (item.external_id) ids.add(item.external_id);
+  const text = item.text || "";
+  for (const ext of Object.keys(actionCtx.vulnRepos)) {
+    if (ext && text.includes(ext)) ids.add(ext);
+  }
+  return [...ids];
+}
+
+function menuOptionsFor(item) {
+  const ids = itemExternalIds(item);
+  const repos = ids.filter((ext) => actionCtx.vulnRepos[ext]);
+  const isChat = item.kind === "chat_msg";
+  let options;
+  if (isChat) {
+    options = CHAT_MSG_BASE;
+  } else if (item.kind === "kpi" || item.kind === "severity" || item.kind === "report") {
+    options = [
+      ["explain", "Explain this"],
+      ["report", "Report on this"],
+      ["slack_msg", "Slack this"],
+      ["other", "Other…"],
+    ];
+  } else {
+    // vuln / commitment
+    options = [
+      ["github_issue", "GitHub issue"],
+      ["github_link", "Find PRs/commits"],
+      ["slack_msg", "Slack this"],
+      ["explain", "Explain this"],
+      ["report", "Report on this"],
+      ["deepen", "Dig deeper"],
+      ["help", "Help"],
+      ["other", "Other…"],
+    ];
+  }
+  return options.filter(([action, label]) => {
+    if (action === "slack_msg") return actionCtx.slack;
+    if (action === "github_issue" || action === "github_link") return actionCtx.github && repos.length;
+    return true;
+  });
+}
+
+function renderCursorMenu(item) {
+  const options = menuOptionsFor(item);
+  cursorMenuEl.innerHTML = options
+    .map(
+      ([action, label]) => `
+    <button class="cursor-option flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs font-medium text-slate-600 hover:bg-indigo-50 hover:text-indigo-700" data-action="${action}">
+      <svg class="text-slate-400" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${MENU_ICONS[action] || ""}</svg>
+      ${label}
+    </button>`
+    )
+    .join("");
+}
+
 function pinCursorMenu(itemEl) {
   menuItem = itemEl;
+  renderCursorMenu(parseItem(itemEl));
   const x = Math.min(cursorPos.x + 18, window.innerWidth - 200);
   const y = Math.min(cursorPos.y + 18, window.innerHeight - 180);
   cursorMenuEl.style.left = `${x}px`;
@@ -1220,6 +1327,8 @@ function unpinCursorMenu() {
   menuItem = null;
   cursorMenuEl.classList.add("hidden");
 }
+
+
 
 function resetCursor() {
   clearTimeout(dwellTimer);
@@ -1234,12 +1343,21 @@ function resetCursor() {
 }
 
 function setAgentGlow(item) {
-  document.querySelectorAll(".dash-item.agent-hover, .chat-msg-item.agent-hover").forEach((el) => el.classList.remove("agent-hover"));
+  document.querySelectorAll(".dash-item.agent-hover, .chat-msg-item.agent-hover, .msg-section.agent-hover").forEach((el) => el.classList.remove("agent-hover"));
   if (item) item.classList.add("agent-hover");
 }
 
 function hoverableFrom(event) {
-  return event.target.closest(".dash-item, .chat-msg-item");
+  // Resolve the deepest hoverable unit: a response section beats its whole
+  // bubble so the menu tracks individual sections instead of the message.
+  const section = event.target.closest(".msg-section");
+  if (section) return section;
+  const dash = event.target.closest(".dash-item");
+  if (dash) return dash;
+  const bubble = event.target.closest(".chat-msg-item");
+  // Sectioned bubbles delegate hover to their sections; padding between them is a gap.
+  if (bubble && bubble.dataset.item) return bubble;
+  return null;
 }
 
 function roamContainer() {
@@ -1251,10 +1369,11 @@ historyEl.addEventListener("mouseover", onRoamOver);
 function onRoamOver(event) {
   const item = hoverableFrom(event);
   if (!item) return;
-  if (hoverItem === item) return;
+  if (hoverItem === item && menuItem === item) return;
   clearTimeout(hideTimer);
   clearTimeout(dwellTimer);
-  if (menuItem && menuItem !== item) unpinCursorMenu();
+  // Repin on the newly hovered element so the menu follows section-to-section moves.
+  if (menuItem !== item) unpinCursorMenu();
   hoverItem = item;
   setAgentGlow(item);
   dwellTimer = setTimeout(() => {
@@ -1281,9 +1400,14 @@ function onRoamOut(event) {
   if (!item) return;
   const to = event.relatedTarget;
   if (to && (item.contains(to) || cursorMenuEl.contains(to))) return;
+  // Walking out of a nested hoverable (e.g. a section inside a bubble) leaves
+  // relatedTarget outside us but a parent hoverable below — skip the dismiss.
+  if (to && to.closest && to.closest(".dash-item, .chat-msg-item, .msg-section")) return;
   clearTimeout(dwellTimer);
-  hoverItem = null;
-  setAgentGlow(null);
+  if (menuItem !== item) {
+    hoverItem = null;
+    setAgentGlow(null);
+  }
   scheduleCursorHide();
 }
 
@@ -1314,25 +1438,51 @@ function onGapWatch(event) {
   }
 }
 
-cursorMenuEl.addEventListener("mouseleave", () => scheduleCursorHide());
+cursorMenuEl.addEventListener("mouseleave", () => {
+  if (!hoverItem) {
+    unpinCursorMenu();
+    setAgentGlow(null);
+  }
+  scheduleCursorHide();
+});
 cursorMenuEl.addEventListener("mouseenter", () => clearTimeout(hideTimer));
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") resetCursor();
 });
 
-cursorMenuEl.querySelectorAll(".cursor-option").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    if (!menuItem) return;
-    const item = parseItem(menuItem);
-    const action = btn.dataset.action;
-    resetCursor();
-    if (item.kind === "chat_msg") {
-      runChatMsgAction(item, action);
+cursorMenuEl.addEventListener("click", (event) => {
+  const btn = event.target.closest(".cursor-option");
+  if (!btn || !menuItem) return;
+  const item = parseItem(menuItem);
+  const action = btn.dataset.action;
+  resetCursor();
+  if (action === "slack_msg" || action === "github_issue" || action === "github_link") {
+    const text = item.text || "";
+    const quoted = text.length > 500 ? `${text.slice(0, 500)}…` : text;
+    const ids = itemExternalIds(item);
+    let prompt;
+    if (action === "slack_msg") {
+      const tie = ids.length ? ` tying it to ${ids[0]}` : "";
+      prompt = text
+        ? `Post this Slack update${tie} via send_slack_update, formatted as a short stakeholder-ready message:\n\n> ${quoted.replace(/\n/g, "\n> ")}`
+        : `Post a Slack update about ${item.external_id || item.title} summarizing its current status and next step via send_slack_update.`;
     } else {
-      runDashboardAction(item, action);
+      const ext = ids.find((e) => actionCtx.vulnRepos[e]) || item.external_id || item.title;
+      const repo = ids.map((e) => actionCtx.vulnRepos[e]).find(Boolean);
+      prompt =
+        action === "github_issue"
+          ? `Create a GitHub issue to track remediation of ${ext} in its linked repo${repo ? ` (${repo})` : ""}.`
+          : `Search the linked repo of ${ext}${repo ? ` (${repo})` : ""} for PRs and commits referencing it and link them into the ledger.`;
     }
-  });
+    spawnChat({ label: `${action === "slack_msg" ? "Slack" : "GitHub"}: ${item.external_id || item.title || "section"}`, prompt });
+    return;
+  }
+  if (item.kind === "chat_msg") {
+    runChatMsgAction(item, action);
+  } else {
+    runDashboardAction(item, action);
+  }
 });
 
 async function runChatMsgAction(item, action) {
@@ -1448,4 +1598,238 @@ document.addEventListener("click", (event) => {
   });
   badge._popover = pop;
   openPopover = pop;
+});
+
+// ==== Settings ====
+const settingsGroupsEl = document.getElementById("settings-groups");
+const settingsUpdatedEl = document.getElementById("settings-updated");
+const settingsSaveBtn = document.getElementById("settings-save");
+const slackTestResultEl = document.getElementById("slack-test-result");
+const githubTestResultEl = document.getElementById("github-test-result");
+
+async function loadSettings() {
+  settingsUpdatedEl.textContent = "Loading…";
+  try {
+    const res = await fetch("/api/settings");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    renderSettings(await res.json());
+  } catch (err) {
+    settingsUpdatedEl.textContent = "Failed to load settings.";
+  }
+}
+
+function settingInputHtml(field) {
+  const value = field.value ?? "";
+  const base =
+    "setting-input w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs outline-none placeholder:text-slate-400 focus:border-indigo-400";
+  if (field.type === "bool") {
+    return `<label class="setting-input flex items-center gap-2 py-1.5 text-xs text-slate-600" data-setting-key="${field.key}" data-kind="bool">
+      <input type="checkbox" class="h-3.5 w-3.5 accent-indigo-600" ${value.toLowerCase() === "true" ? "checked" : ""} />
+      enabled
+    </label>`;
+  }
+  if (field.type === "color") {
+    const color = /^#[0-9a-fA-F]{6}$/.test(value) ? value : "#111827";
+    return `<div class="flex items-center gap-2">
+      <input type="color" value="${color}" class="setting-input h-8 w-10 shrink-0 cursor-pointer rounded-md border border-slate-200 bg-white p-1" data-setting-key="${field.key}" />
+      <span class="font-mono text-[11px] text-slate-400">${escapeHTML(value)}</span>
+    </div>`;
+  }
+  if (field.secret) {
+    return `<div class="flex items-center gap-1.5">
+      <input type="password" value="${escapeHTML(value)}" placeholder="${escapeHTML(field.hint || "")}" class="${base}" data-setting-key="${field.key}" autocomplete="off" />
+      <button type="button" class="setting-reveal shrink-0 rounded-lg border border-slate-200 px-2 py-1.5 text-[11px] text-slate-500 hover:bg-slate-50" title="Show/hide">show</button>
+    </div>`;
+  }
+  if (field.type === "number") {
+    return `<input type="number" value="${escapeHTML(value)}" class="${base}" data-setting-key="${field.key}" />`;
+  }
+  const datalist = field.options === "models" ? ' list="settings-model-options"' : "";
+  return `<input type="text" value="${escapeHTML(value)}" placeholder="${escapeHTML(field.hint || "")}" class="${base}" data-setting-key="${field.key}"${datalist} />`;
+}
+
+function renderSettings(data) {
+  document.getElementById("settings-env-path").textContent = data.env_file || ".env";
+  settingsUpdatedEl.textContent = data.env_file_exists
+    ? `Editing ${data.env_file}`
+    : `${data.env_file} will be created on save.`;
+  const suggestions = (data.model_suggestions || [])
+    .map((m) => `<option value="${escapeHTML(m)}"></option>`)
+    .join("");
+
+  settingsGroupsEl.innerHTML =
+    `<datalist id="settings-model-options">${suggestions}</datalist>` +
+    (data.groups || [])
+      .map((group) => {
+        const fields = group.fields
+          .map(
+            (field) => `
+          <label class="block">
+            <span class="mb-1 block text-xs font-medium text-slate-600">${escapeHTML(field.label)}</span>
+            ${settingInputHtml(field)}
+            ${field.hint && !field.secret ? `<span class="mt-0.5 block text-[10px] text-slate-400">${escapeHTML(field.hint)}</span>` : ""}
+          </label>`
+          )
+          .join("");
+        const brandPreview =
+          group.id === "whitelabel"
+            ? `<div class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Live preview</p>
+                <div id="brand-preview" class="mt-2 rounded-lg border border-slate-200 bg-white p-3">
+                  <div class="flex items-center gap-2">
+                    <span id="brand-swatch" class="h-6 w-6 rounded-md"></span>
+                    <div>
+                      <p id="brand-company" class="text-xs font-semibold text-slate-700"></p>
+                      <p id="brand-title" class="text-[10px] text-slate-400"></p>
+                    </div>
+                  </div>
+                </div>
+                <p class="mt-2 font-mono text-[10px] text-slate-400" id="brand-colors"></p>
+              </div>`
+            : "";
+        return `<section class="settings-group rounded-2xl border border-slate-200 bg-white p-4" data-group="${group.id}">
+          <h3 class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">${escapeHTML(group.title)}</h3>
+          <p class="mt-0.5 text-xs text-slate-400">${escapeHTML(group.description)}</p>
+          <div class="mt-3 grid gap-4 sm:grid-cols-2">${fields}${brandPreview}</div>
+        </section>`;
+      })
+      .join("");
+
+  settingsGroupsEl.querySelectorAll(".setting-reveal").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const input = btn.previousElementSibling || btn.parentElement.querySelector("input");
+      const showing = input.type === "text";
+      input.type = showing ? "password" : "text";
+      btn.textContent = showing ? "show" : "hide";
+    });
+  });
+
+  const group = settingsGroupsEl.querySelector('[data-group="whitelabel"]');
+  if (group) {
+    const sync = () => {
+      const get = (k) => {
+        const el = group.querySelector(`[data-setting-key="${k}"]`);
+        return el ? el.value : "";
+      };
+      document.getElementById("brand-company").textContent = get("REPORT_COMPANY_NAME") || "vulngent";
+      document.getElementById("brand-title").textContent = get("REPORT_TITLE") || "Vulnerability Remediation Report";
+      const primary = get("REPORT_PRIMARY_COLOR") || "#111827";
+      const accent = get("REPORT_ACCENT_COLOR") || "#2563EB";
+      document.getElementById("brand-swatch").style.background = primary;
+      document.getElementById("brand-colors").textContent = `${primary} · ${accent}`;
+      document.getElementById("brand-preview").style.borderTopColor = accent;
+      document.getElementById("brand-preview").style.borderTopWidth = "3px";
+    };
+    group.querySelectorAll("input").forEach((el) => el.addEventListener("input", sync));
+    sync();
+  }
+
+  settingsGroupsEl.querySelectorAll("input").forEach((el) =>
+    el.addEventListener("input", () => {
+      if (el.type === "color" && el.nextElementSibling) el.nextElementSibling.textContent = el.value;
+    })
+  );
+}
+
+async function saveSettings() {
+  const values = {};
+  settingsGroupsEl.querySelectorAll("[data-setting-key]").forEach((el) => {
+    if (el.dataset.kind === "bool") {
+      values[el.dataset.settingKey] = el.querySelector("input").checked ? "true" : "false";
+    } else {
+      values[el.dataset.settingKey] = el.value;
+    }
+  });
+  settingsSaveBtn.disabled = true;
+  try {
+    const res = await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    showToast({ title: "Settings saved", body: ".env updated — applies to new operations." });
+  } catch (err) {
+    showToast({ title: "Save failed", body: err.message });
+  } finally {
+    settingsSaveBtn.disabled = false;
+  }
+}
+
+settingsSaveBtn.addEventListener("click", saveSettings);
+document.getElementById("settings-reload").addEventListener("click", loadSettings);
+
+function renderIntegrationResult(el, ok, html) {
+  el.classList.remove("hidden");
+  el.className = el.className.replace(/border-(emerald|red)-200/g, "").trim();
+  el.classList.add("rounded-xl", "border", "p-3", "text-xs");
+  if (ok) el.classList.add("border-emerald-200", "bg-emerald-50", "text-emerald-800");
+  else el.classList.add("border-red-200", "bg-red-50", "text-red-700");
+  el.innerHTML = html;
+}
+
+document.getElementById("slack-test-send").addEventListener("click", async () => {
+  const btn = document.getElementById("slack-test-send");
+  btn.disabled = true;
+  btn.textContent = "Checking…";
+  try {
+    const res = await fetch("/api/settings/test/slack", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        channel: document.getElementById("slack-test-channel").value || null,
+        message: document.getElementById("slack-test-message").value || null,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      renderIntegrationResult(slackTestResultEl, false, escapeHTML(data.error || "Slack test failed."));
+    } else {
+      const head = `<p class="font-semibold">✓ Connected to ${escapeHTML(data.team || "Slack")} as @${escapeHTML(data.bot || "bot")}</p>`;
+      const sent = data.sent
+        ? `<div class="mt-2 rounded-lg border border-emerald-200 bg-white p-2.5 text-slate-700">
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Posted to ${escapeHTML(data.sent.channel)} · ts ${escapeHTML(data.sent.ts)}</p>
+            <p class="mt-1 whitespace-pre-wrap font-mono text-[11px]">${escapeHTML(data.sent.message)}</p>
+          </div>`
+        : `<p class="mt-1 text-[11px]">Token verified. Enter a channel to post a real message.</p>`;
+      renderIntegrationResult(slackTestResultEl, true, head + sent);
+    }
+  } catch (err) {
+    renderIntegrationResult(slackTestResultEl, false, `Request failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Check token / send test";
+  }
+});
+
+document.getElementById("github-test-run").addEventListener("click", async () => {
+  const btn = document.getElementById("github-test-run");
+  btn.disabled = true;
+  btn.textContent = "Checking…";
+  try {
+    const res = await fetch("/api/settings/test/github", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repo: document.getElementById("github-test-repo").value || null }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      renderIntegrationResult(githubTestResultEl, false, escapeHTML(data.error || "GitHub test failed."));
+    } else {
+      let html = `<p class="font-semibold">✓ Token valid — authenticated as @${escapeHTML(data.login)}</p>`;
+      if (data.repo) {
+        const p = data.repo.permissions || {};
+        html += `<p class="mt-1 text-[11px]">Repo ${escapeHTML(data.repo.full_name)} (${data.repo.private ? "private" : "public"}): pull ✓, push ${p.push ? "✓" : "✗"}, admin ${p.admin ? "✓" : "✗"}. Agents need push to file issues and read PRs/commits.</p>`;
+      } else {
+        html += `<p class="mt-1 text-[11px]">Enter a repo above to check access against it.</p>`;
+      }
+      renderIntegrationResult(githubTestResultEl, true, html);
+    }
+  } catch (err) {
+    renderIntegrationResult(githubTestResultEl, false, `Request failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Run check";
+  }
 });

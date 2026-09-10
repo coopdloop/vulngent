@@ -350,7 +350,8 @@ details.thoughts summary::-webkit-details-marker {
   position: relative;
 }
 .dash-item.agent-hover,
-.chat-msg-item.agent-hover {
+.chat-msg-item.agent-hover,
+.msg-section.agent-hover {
   background: #faf5ff;
   border-color: #c4b5fd !important;
   border-radius: 16px;
