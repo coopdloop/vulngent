@@ -1284,14 +1284,37 @@ function onRoamOut(event) {
   clearTimeout(dwellTimer);
   hoverItem = null;
   setAgentGlow(null);
+  scheduleCursorHide();
+}
+
+function scheduleCursorHide() {
+  clearTimeout(hideTimer);
   hideTimer = setTimeout(() => {
     if (!hoverItem) resetCursor();
   }, 200);
 }
 
-cursorMenuEl.addEventListener("mouseleave", () => {
-  hideTimer = setTimeout(() => resetCursor(), 200);
-});
+// mouseout doesn't fire when moving from an item into a non-hoverable gap
+// (container padding, space between bubbles), which used to leave the menu
+// stuck open. Watch the pointer: if it's over neither the item nor the menu,
+// start the dismiss timer.
+historyEl.addEventListener("mousemove", onGapWatch);
+dashboardViewEl.addEventListener("mousemove", onGapWatch);
+cursorMenuEl.addEventListener("mousemove", () => clearTimeout(hideTimer));
+function onGapWatch(event) {
+  const overItem = hoverableFrom(event);
+  if (overItem) {
+    clearTimeout(hideTimer);
+    return;
+  }
+  if (menuItem || hoverItem) {
+    hoverItem = null;
+    setAgentGlow(null);
+    scheduleCursorHide();
+  }
+}
+
+cursorMenuEl.addEventListener("mouseleave", () => scheduleCursorHide());
 cursorMenuEl.addEventListener("mouseenter", () => clearTimeout(hideTimer));
 
 document.addEventListener("keydown", (event) => {
