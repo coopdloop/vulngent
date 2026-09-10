@@ -344,12 +344,15 @@ details.thoughts summary::-webkit-details-marker {
   animation: pop-in 0.15s ease-out both;
 }
 
-/* ==== Dashboard agent-hover glow ==== */
-.dash-item {
+/* ==== Agent-hover glow (dashboard items + chat bubbles) ==== */
+.dash-item,
+.chat-msg-item {
   position: relative;
 }
-.dash-item.agent-hover {
+.dash-item.agent-hover,
+.chat-msg-item.agent-hover {
   background: #faf5ff;
   border-color: #c4b5fd !important;
+  border-radius: 16px;
   box-shadow: 0 0 0 1.5px rgba(139, 92, 246, 0.45), 0 0 18px rgba(139, 92, 246, 0.28);
 }

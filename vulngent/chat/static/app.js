@@ -90,7 +90,7 @@ function setView(view) {
   });
   applyInspectorVisibility();
   setSidebarOpen(false);
-  if (view !== "dashboard") resetCursor();
+  resetCursor();
   if (view === "dashboard") loadDashboard();
   repositionAgent();
 }
@@ -440,16 +440,22 @@ function repositionAgent() {
       }
     }
   } else if (currentView === "dashboard") {
-    setAgentAnchor(null); // hand control to the mouse-follow handlers
-    agentLerpFactor = 0.18;
-    agentCursorEl.classList.remove("agent-spring");
-    agentCursorEl.classList.add("agent-follow");
-    if (!cursorActive) {
-      const rect = dashboardViewEl.getBoundingClientRect();
-      startCursor(rect.left + rect.width / 2, rect.top + 120);
-    }
+    startRoam(dashboardViewEl, 120);
+  } else if (currentView === "chat") {
+    startRoam(historyEl, 60);
   } else {
     springAgentTo("navbar");
+  }
+}
+
+function startRoam(container, yOffset) {
+  setAgentAnchor(null); // hand control to the mouse-follow handlers
+  agentLerpFactor = 0.18;
+  agentCursorEl.classList.remove("agent-spring");
+  agentCursorEl.classList.add("agent-follow");
+  if (!cursorActive) {
+    const rect = container.getBoundingClientRect();
+    startCursor(rect.left + rect.width / 2, rect.top + yOffset);
   }
 }
 
@@ -525,6 +531,7 @@ function renderAgentMessage(entry) {
   wrapper.innerHTML = avatarSvg();
   wrapper.appendChild(bubble);
   historyEl.appendChild(wrapper);
+  makeChatMsgHoverable(wrapper, entry.message || "");
   scrollToBottom();
 
   if (currentView === "chat") {
@@ -547,6 +554,21 @@ function renderSystemMessage(message) {
 }
 
 // ==== Response sections: highlight + continue ====
+
+// Assistant bubbles are agent-hover targets (same UX as dashboard items).
+function makeChatMsgHoverable(wrapper, rawText) {
+  wrapper.classList.add("chat-msg-item");
+  const sections = wrapper.querySelectorAll(".msg-section");
+  const payload = { kind: "chat_msg", text: rawText };
+  if (sections.length) {
+    sections.forEach((sec) => {
+      sec.dataset.item = JSON.stringify({ kind: "chat_msg", text: sec.dataset.sectionText || rawText });
+    });
+  } else {
+    wrapper.dataset.item = JSON.stringify(payload);
+  }
+}
+
 function renderMessageWithSections(entry) {
   const sections = Array.isArray(entry.sections) ? entry.sections.filter((s) => s && s.content) : [];
   if (!sections.length) {
@@ -554,7 +576,7 @@ function renderMessageWithSections(entry) {
   }
   let html = "";
   sections.forEach((s, i) => {
-    html += `<div class="msg-section" data-section-key="${escapeHTML(s.key)}" data-section-text="${escapeHTML(s.content)}" title="Click to dig into this section">`;
+    html += `<div class="msg-section" data-section-key="${escapeHTML(s.key)}" data-section-text="${escapeHTML(s.content)}">`;
     if (sections.length > 1) {
       html += `<span class="section-tag">${escapeHTML(s.key.replace(/_/g, " "))}</span>`;
     }
@@ -1212,12 +1234,22 @@ function resetCursor() {
 }
 
 function setAgentGlow(item) {
-  document.querySelectorAll(".dash-item.agent-hover").forEach((el) => el.classList.remove("agent-hover"));
+  document.querySelectorAll(".dash-item.agent-hover, .chat-msg-item.agent-hover").forEach((el) => el.classList.remove("agent-hover"));
   if (item) item.classList.add("agent-hover");
 }
 
-dashboardViewEl.addEventListener("mouseover", (event) => {
-  const item = event.target.closest(".dash-item");
+function hoverableFrom(event) {
+  return event.target.closest(".dash-item, .chat-msg-item");
+}
+
+function roamContainer() {
+  return currentView === "dashboard" ? dashboardViewEl : historyEl;
+}
+
+dashboardViewEl.addEventListener("mouseover", onRoamOver);
+historyEl.addEventListener("mouseover", onRoamOver);
+function onRoamOver(event) {
+  const item = hoverableFrom(event);
   if (!item) return;
   if (hoverItem === item) return;
   clearTimeout(hideTimer);
@@ -1227,20 +1259,25 @@ dashboardViewEl.addEventListener("mouseover", (event) => {
   setAgentGlow(item);
   dwellTimer = setTimeout(() => {
     if (hoverItem === item) pinCursorMenu(item);
-  }, 350);
-});
+  }, 300);
+}
 
-dashboardViewEl.addEventListener("mousemove", (event) => {
+dashboardViewEl.addEventListener("mousemove", onRoamMove);
+historyEl.addEventListener("mousemove", onRoamMove);
+function onRoamMove(event) {
+  if (typingBubble || streamBubble) return; // agent is working; don't steal it
   agentAnchor = null;
   agentLerpFactor = 0.18;
   agentCursorEl.classList.remove("agent-spring");
   agentCursorEl.classList.add("agent-follow");
   cursorTarget = { x: event.clientX, y: event.clientY };
   if (!cursorActive) startCursor(event.clientX, event.clientY);
-});
+}
 
-dashboardViewEl.addEventListener("mouseout", (event) => {
-  const item = event.target.closest(".dash-item");
+dashboardViewEl.addEventListener("mouseout", onRoamOut);
+historyEl.addEventListener("mouseout", onRoamOut);
+function onRoamOut(event) {
+  const item = hoverableFrom(event);
   if (!item) return;
   const to = event.relatedTarget;
   if (to && (item.contains(to) || cursorMenuEl.contains(to))) return;
@@ -1250,7 +1287,7 @@ dashboardViewEl.addEventListener("mouseout", (event) => {
   hideTimer = setTimeout(() => {
     if (!hoverItem) resetCursor();
   }, 200);
-});
+}
 
 cursorMenuEl.addEventListener("mouseleave", () => {
   hideTimer = setTimeout(() => resetCursor(), 200);
@@ -1267,9 +1304,43 @@ cursorMenuEl.querySelectorAll(".cursor-option").forEach((btn) => {
     const item = parseItem(menuItem);
     const action = btn.dataset.action;
     resetCursor();
-    runDashboardAction(item, action);
+    if (item.kind === "chat_msg") {
+      runChatMsgAction(item, action);
+    } else {
+      runDashboardAction(item, action);
+    }
   });
 });
+
+async function runChatMsgAction(item, action) {
+  const text = item.text || "";
+  if (action === "copy") {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast({ title: "Copied to clipboard" });
+    } catch (err) {
+      showToast({ title: "Copy failed" });
+    }
+    return;
+  }
+  const excerpt = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+  const quoted = text.length > 800 ? `${text.slice(0, 800)}…` : text;
+  if (action === "other") {
+    inputEl.value = `About your earlier reply: `;
+    autogrowInput();
+    inputEl.focus();
+    return;
+  }
+  let prompt;
+  if (action === "report") {
+    prompt = `Draft a status update based on this part of your earlier reply — key facts, risks, and next steps. Suggest a report artifact if one would help. The excerpt:\n\n> ${quoted.replace(/\n/g, "\n> ")}`;
+  } else {
+    // deepen / explain / help all mean: expand on this message
+    prompt = `Go deeper on this part of your earlier reply. Expand with more detail, data, and concrete next steps:\n\n> ${quoted.replace(/\n/g, "\n> ")}`;
+  }
+  appendUserMessage(action === "report" ? `Report on this: ${excerpt}` : `Go deeper: ${excerpt}`);
+  socket.send(JSON.stringify({ type: "user_message", text: prompt }));
+}
 
 function runDashboardAction(item, action) {
   const kind = item.kind || "vuln";
