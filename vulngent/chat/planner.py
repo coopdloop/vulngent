@@ -10,7 +10,7 @@ def plan_write_action(tool_name: str, arguments: dict[str, Any] | None = None, s
     """Record a planned side-effecting action and return its details for the analyst's confirmation."""
     manager = get_current_confirmation_manager()
     if manager is None:
-        return json.dumps({"error": "unable to record action: no active chat session"})
+        raise RuntimeError("plan_write_action called outside an active chat session")
     args = dict(arguments) if arguments else {}
     manager.set_pending_action(tool_name, args, summary)
     payload = {

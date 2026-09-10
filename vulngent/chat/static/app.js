@@ -110,6 +110,7 @@ function applyInspectorVisibility() {
   const hidden = inspectorCollapsed || currentView !== "chat";
   inspectorEl.classList.toggle("hidden", hidden);
   inspectorEl.classList.toggle("lg:flex", !hidden);
+  requestAnimationFrame(drawWires);
 }
 
 function setInspectorCollapsed(collapsed) {
@@ -513,6 +514,17 @@ function renderAgentMessage(entry) {
     bubble.appendChild(thoughtsEl);
   }
 
+  // Per-tool chips = invocation reasons; they anchor the wire endpoints on the bubble side.
+  const toolCalls = entry.tool_calls || [];
+  if (toolCalls.length) {
+    const chipsBar = document.createElement("div");
+    chipsBar.className = "tool-chips mt-2 flex flex-wrap gap-1.5";
+    toolCalls.forEach((call, idx) => {
+      chipsBar.appendChild(buildToolChip(call, idx, entry));
+    });
+    bubble.appendChild(chipsBar);
+  }
+
   const metaParts = [];
   const time = feedbackTimestamp(entry.timestamp);
   if (time) metaParts.push(time);
@@ -542,6 +554,45 @@ function renderAgentMessage(entry) {
   }
 
   updateInspector(entry.tool_calls ?? []);
+  requestAnimationFrame(drawWires);
+}
+
+function buildToolChip(call, idx, entry) {
+  const chip = document.createElement("button");
+  const color = wireColor(call.call_id);
+  chip.type = "button";
+  chip.className = `tool-chip${call.is_error ? " tool-chip-err" : ""}`;
+  chip.dataset.callId = call.call_id;
+  const argPreview = shortArgPreview(call);
+  chip.title = `${call.name}\n${argPreview ? argPreview + `\n` : ""}#${idx + 1} · ${call.result || ""}`.slice(0, 300);
+  const dot = document.createElement("span");
+  dot.className = "wire-dot";
+  dot.style.background = color;
+  const label = document.createElement("span");
+  label.textContent = call.name.replace(/_/g, " ");
+  chip.appendChild(dot);
+  chip.appendChild(label);
+  const lit = (on) => setWireLit(call.call_id, on);
+  chip.addEventListener("mouseenter", () => lit(true));
+  chip.addEventListener("mouseleave", () => lit(false));
+  chip.addEventListener("click", () => {
+    const card = document.getElementById(`tool-card-${cssEscape(call.call_id)}`);
+    if (!card) return;
+    lit(true);
+    card.classList.add("wire-lit-card");
+    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    setTimeout(() => {
+      lit(false);
+      card.classList.remove("wire-lit-card");
+    }, 1600);
+  });
+  return chip;
+}
+
+function shortArgPreview(call) {
+  if (!call.arguments || typeof call.arguments === "string") return "";
+  const entries = Object.entries(call.arguments).slice(0, 2);
+  return entries.map(([k, v]) => `${k}=${String(v).slice(0, 40)}`).join(" ");
 }
 
 function renderSystemMessage(message) {
@@ -741,6 +792,69 @@ function resolveConfirmationCards() {
   });
 }
 
+// ==== Tool wiring (chat <-> inspector cables) ====
+const wireLayerEl = document.getElementById("wire-layer");
+const WIRE_COLORS = ["#6366F1", "#8B5CF6", "#7C3AED", "#A78BFA", "#4F46E5", "#9333EA", "#6D28D9", "#3B82F6"];
+
+function wireColor(callId) {
+  let hash = 0;
+  const str = String(callId || "");
+  for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+  return WIRE_COLORS[hash % WIRE_COLORS.length];
+}
+
+function drawWires() {
+  const frame = wireLayerEl.parentElement;
+  const frameRect = frame.getBoundingClientRect();
+  const inspectorOpen = !inspectorCollapsed && currentView === "chat" && !inspectorEl.closest(".hidden") && getComputedStyle(inspectorEl).display !== "none";
+  if (!inspectorOpen) {
+    wireLayerEl.classList.add("hidden");
+    wireLayerEl.innerHTML = "";
+    return;
+  }
+  wireLayerEl.classList.remove("hidden");
+  wireLayerEl.setAttribute("viewBox", `0 0 ${frameRect.width} ${frameRect.height}`);
+  let markup = "";
+  document.querySelectorAll(".tool-chip[data-call-id]").forEach((chip) => {
+    const card = document.getElementById(`tool-card-${cssEscape(chip.dataset.callId)}`);
+    if (!card || !historyEl.contains(chip)) return;
+    const sr = chip.getBoundingClientRect();
+    const tr = card.getBoundingClientRect();
+    const sx = sr.right - frameRect.left;
+    const sy = sr.top + sr.height / 2 - frameRect.top;
+    const tx = tr.left - frameRect.left;
+    const ty = tr.top + tr.height / 2 - frameRect.top;
+    if (tx <= sx) return; // card left of chip (inspector closed/overlaid) -> skip
+    const dx = Math.max(48, (tx - sx) * 0.45);
+    const color = wireColor(chip.dataset.callId);
+    markup += `<path class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" d="M ${sx} ${sy} C ${sx + dx} ${sy}, ${tx - dx} ${ty}, ${tx} ${ty}" stroke="${color}" />`;
+    markup += `<circle class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" cx="${sx}" cy="${sy}" r="2.4" fill="${color}" />`;
+  });
+  wireLayerEl.innerHTML = markup;
+}
+
+function setWireLit(callId, on) {
+  wireLayerEl.querySelectorAll(`.wire-cable[data-call-id="${cssEscape(callId)}"]`).forEach((p) => p.classList.toggle("wire-lit", on));
+}
+
+function cssEscape(value) {
+  return window.CSS && CSS.escape ? CSS.escape(String(value)) : String(value).replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+let wireRafPending = false;
+function scheduleWires() {
+  if (wireRafPending) return;
+  wireRafPending = true;
+  requestAnimationFrame(() => {
+    wireRafPending = false;
+    drawWires();
+  });
+}
+
+window.addEventListener("resize", scheduleWires);
+historyEl.addEventListener("scroll", scheduleWires, { passive: true });
+toolCallsEl.addEventListener("scroll", scheduleWires, { passive: true });
+
 // ==== Tool inspector ====
 function updateInspector(calls) {
   inspectorCalls = calls ?? [];
@@ -773,20 +887,25 @@ function renderInspector() {
   inspectorCalls.forEach((call, index) => {
     const card = document.createElement("article");
     const isError = Boolean(call.is_error);
-    card.className = `rounded-xl border bg-white shadow-sm ${isError ? "border-red-200" : "border-slate-200"}`;
+    const latest = index === inspectorCalls.length - 1;
+    card.className = `tool-card rounded-xl border bg-white shadow-sm ${isError ? "border-red-200" : "border-slate-200"}`;
+    card.id = `tool-card-${call.call_id}`;
+    card.dataset.callId = call.call_id;
+    const color = wireColor(call.call_id);
     card.innerHTML = `
       <div class="flex items-center gap-2 px-3 pt-2.5">
-        <span class="h-1.5 w-1.5 shrink-0 rounded-full ${isError ? "bg-red-500" : "bg-emerald-500"}"></span>
+        <span class="h-1.5 w-1.5 shrink-0 rounded-full" style="background:${color}"></span>
         <p class="truncate font-mono text-xs font-semibold text-slate-700" title="${escapeHTML(call.name)}">${escapeHTML(call.name)}</p>
         <span class="ml-auto shrink-0 text-[10px] text-slate-300">#${index + 1}</span>
       </div>
       <div class="px-3 pb-2.5 pt-1">
-        ${toolSection("Arguments", formatPayload(call.arguments), true)}
-        ${toolSection(isError ? "Error" : "Result", formatPayload(call.result_parsed ?? call.result), !isError)}
+        ${toolSection("Arguments", formatPayload(call.arguments), latest)}
+        ${toolSection(isError ? "Error" : "Result", formatPayload(call.result_parsed ?? call.result), latest && !isError)}
       </div>`;
     toolCallsEl.appendChild(card);
   });
   toolCallsEl.scrollTop = toolCallsEl.scrollHeight;
+  requestAnimationFrame(drawWires);
 }
 
 function toolSection(label, content, open) {
@@ -1461,6 +1580,7 @@ cursorMenuEl.addEventListener("click", (event) => {
     const text = item.text || "";
     const quoted = text.length > 500 ? `${text.slice(0, 500)}…` : text;
     const ids = itemExternalIds(item);
+    let label = `${action === "slack_msg" ? "Slack" : "GitHub"}: ${item.external_id || item.title || "section"}`;
     let prompt;
     if (action === "slack_msg") {
       const tie = ids.length ? ` tying it to ${ids[0]}` : "";
@@ -1475,7 +1595,17 @@ cursorMenuEl.addEventListener("click", (event) => {
           ? `Create a GitHub issue to track remediation of ${ext} in its linked repo${repo ? ` (${repo})` : ""}.`
           : `Search the linked repo of ${ext}${repo ? ` (${repo})` : ""} for PRs and commits referencing it and link them into the ledger.`;
     }
-    spawnChat({ label: `${action === "slack_msg" ? "Slack" : "GitHub"}: ${item.external_id || item.title || "section"}`, prompt });
+    if (item.kind === "chat_msg") {
+      // Fire in the current conversation — the hovered section already has its context here.
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        renderSystemMessage("Not connected to the server.");
+        return;
+      }
+      appendUserMessage(label);
+      socket.send(JSON.stringify({ type: "user_message", text: prompt }));
+      return;
+    }
+    spawnChat({ label, prompt });
     return;
   }
   if (item.kind === "chat_msg") {
