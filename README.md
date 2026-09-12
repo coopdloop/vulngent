@@ -67,6 +67,62 @@ uv run vulngent run-cycle
 triage agent may pause and ask you (the analyst) a direct question when it needs help
 confirming reachability — answer at the `your answer>` prompt.
 
+## Authentication (Sign in with Google)
+
+Auth is **optional and off by default** — with no `GOOGLE_CLIENT_ID` set, the chat UI
+stays fully open (local-dev friendly). Set a client id and the app requires Google
+sign-in: a login screen gates the UI, a profile card appears bottom-left in the sidebar,
+and user avatars show on chat messages. Chat threads become per-user (legacy threads with
+no owner stay visible to everyone).
+
+### Create the Google OAuth client ID
+
+In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials):
+
+1. **APIs & Services → OAuth consent screen** — configure it once:
+   - User type: **External** (or **Internal** for a Workspace-only app)
+   - App name, user support email, developer contact email
+   - Scopes: the defaults (`openid`, `email`, `profile`) are all this needs
+   - Add yourself under **Test users** while the app is in "Testing"
+2. **APIs & Services → Credentials → Create credentials → OAuth client ID**:
+   - **Application type:** `Web application`
+   - **Name:** anything, e.g. `vulngent web`
+   - **Authorized JavaScript origins** (exact scheme+host+port, no path):
+     - `http://localhost:7860`
+     - `http://127.0.0.1:7860`
+     - your production origin, e.g. `https://vulngent.example.com`
+   - **Authorized redirect URIs:** *none required* — this app uses Google Identity
+     Services (the ID-token button), not the redirect/code flow.
+3. Copy the **Client ID** (looks like `1234567890-abc123.apps.googleusercontent.com`).
+   The **client secret is not used** by this flow, so you can ignore it.
+
+### Configure vulngent
+
+Set these in `.env` (or via the in-app **Settings → Authentication**):
+
+```bash
+GOOGLE_CLIENT_ID=1234567890-abc123.apps.googleusercontent.com
+GOOGLE_ALLOWED_DOMAIN=example.com   # optional: restrict to one Workspace domain
+SESSION_SECRET=<long-random-string>  # optional but recommended so logins survive restarts
+```
+
+Then apply the schema migration (adds the `users` table + `chat_threads.owner_id`,
+no data loss) and start the server:
+
+```bash
+uv run vulngent migrate
+uv run vulngent chat
+```
+
+**Summary of what to enter in the Cloud Console:**
+
+| Field | Value |
+| --- | --- |
+| Application type | Web application |
+| Authorized JavaScript origins | `http://localhost:7860`, `http://127.0.0.1:7860`, prod origin |
+| Authorized redirect URIs | (none needed) |
+| Scopes | `openid`, `email`, `profile` (defaults) |
+
 ## Bringing in your own vuln data
 
 `vulngent import` expects a normalized JSON list or CSV with these fields (see

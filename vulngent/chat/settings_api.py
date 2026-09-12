@@ -50,6 +50,16 @@ SETTINGS_GROUPS: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "auth",
+        "title": "Authentication (Google)",
+        "description": "Sign in with Google. Leave the client id blank to disable auth (open local dev).",
+        "fields": [
+            {"key": "GOOGLE_CLIENT_ID", "label": "OAuth client ID", "hint": "…apps.googleusercontent.com (from Google Cloud Console)"},
+            {"key": "GOOGLE_ALLOWED_DOMAIN", "label": "Allowed domain", "hint": "Optional: restrict to one Workspace domain, e.g. example.com"},
+            {"key": "SESSION_SECRET", "label": "Session secret", "secret": True, "hint": "Stable random string so logins survive restarts"},
+        ],
+    },
+    {
         "id": "github",
         "title": "GitHub",
         "description": "Issues, PR/commit tracking against remediation work.",

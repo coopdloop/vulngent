@@ -16,19 +16,21 @@ from autogen_agentchat.messages import (
     ToolCallRequestEvent,
     ToolCallSummaryMessage,
 )
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 
 from vulngent.agents import tools as agent_tools
 from vulngent.agents.conversational import ConversationalAgent
+from vulngent.chat.auth import current_user, require_user, router as auth_router, session_secret
 from vulngent.chat.confirmation import ConfirmationManager, PendingAction
 from vulngent.chat.settings_api import router as settings_router
 from sqlalchemy import select
 
 from vulngent.config import get_settings
 from vulngent.db import repository as repo
-from vulngent.db.models import Asset, ChatMention, ChatMessage, ChatThread, Vulnerability, VulnStatus
+from vulngent.db.models import Asset, ChatMention, ChatMessage, ChatThread, User, Vulnerability, VulnStatus
 from vulngent.db.session import ensure_schema, get_session
 from vulngent.report_data import collect_report_data
 from vulngent.reporting import SUPPORTED_FORMATS, render_report
@@ -37,8 +39,16 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 INDEX_HTML = STATIC_DIR / "index.html"
 
 app = FastAPI()
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=session_secret(),
+    same_site="lax",
+    https_only=False,
+    max_age=14 * 24 * 3600,
+)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(settings_router)
+app.include_router(auth_router)
 ensure_schema()
 
 WRITE_TOOL_REGISTRY: dict[str, Callable[..., str]] = {
@@ -89,15 +99,22 @@ async def homepage() -> FileResponse:
     return FileResponse(INDEX_HTML)
 
 
+def _owner_id(request: Request) -> int | None:
+    user = current_user(request)
+    return user["id"] if user else None
+
+
 @app.get("/api/sessions")
-async def list_chat_sessions(archived: bool = False) -> dict[str, Any]:
-    return await asyncio.to_thread(_collect_sessions, archived)
+async def list_chat_sessions(request: Request, archived: bool = False, _: Any = Depends(require_user)) -> dict[str, Any]:
+    return await asyncio.to_thread(_collect_sessions, archived, _owner_id(request))
 
 
-def _collect_sessions(archived: bool = False) -> dict[str, Any]:
+def _collect_sessions(archived: bool = False, owner_id: int | None = None) -> dict[str, Any]:
     with get_session() as session:
         query = select(ChatThread).order_by(ChatThread.updated_at.desc()).limit(50)
         query = query.where(ChatThread.archived_at.isnot(None)) if archived else query.where(ChatThread.archived_at.is_(None))
+        if owner_id is not None:
+            query = query.where(ChatThread.owner_id == owner_id)
         threads = session.execute(query).scalars().all()
         return {
             "sessions": [
@@ -115,12 +132,20 @@ def _collect_sessions(archived: bool = False) -> dict[str, Any]:
         }
 
 
+def _thread_owned(thread: ChatThread, owner_id: int | None) -> bool:
+    """Owner scoping: when auth is off (owner_id None) everything is visible;
+    when on, only own threads plus legacy unowned ones."""
+    return owner_id is None or thread.owner_id in (None, owner_id)
+
+
 @app.post("/api/sessions/{thread_id}/archive")
-async def archive_chat_session(thread_id: str, archived: bool = True) -> dict[str, Any]:
+async def archive_chat_session(thread_id: str, request: Request, archived: bool = True, _: Any = Depends(require_user)) -> dict[str, Any]:
+    owner_id = _owner_id(request)
+
     def _set() -> bool:
         with get_session() as session:
             thread = session.get(ChatThread, thread_id)
-            if thread is None:
+            if thread is None or not _thread_owned(thread, owner_id):
                 return False
             thread.archived_at = datetime.now(timezone.utc) if archived else None
             session.commit()
@@ -132,11 +157,13 @@ async def archive_chat_session(thread_id: str, archived: bool = True) -> dict[st
 
 
 @app.delete("/api/sessions/{thread_id}")
-async def delete_chat_session(thread_id: str) -> dict[str, Any]:
+async def delete_chat_session(thread_id: str, request: Request, _: Any = Depends(require_user)) -> dict[str, Any]:
+    owner_id = _owner_id(request)
+
     def _delete() -> bool:
         with get_session() as session:
             thread = session.get(ChatThread, thread_id)
-            if thread is None:
+            if thread is None or not _thread_owned(thread, owner_id):
                 return False
             session.delete(thread)  # cascades to messages + mentions
             session.commit()
@@ -269,7 +296,8 @@ async def generate_report(format: str = "md") -> Response:
 
 
 class ChatSession:
-    def __init__(self) -> None:
+    def __init__(self, owner_id: int | None = None) -> None:
+        self.owner_id = owner_id
         self.session_id = uuid.uuid4().hex[:8]
         self._confirmation_manager = ConfirmationManager()
         self.agent = ConversationalAgent(confirmation_manager=self._confirmation_manager)
@@ -304,6 +332,8 @@ class ChatSession:
             thread = session.get(ChatThread, thread_id)
             if thread is None:
                 raise KeyError(thread_id)
+            if self.owner_id is not None and thread.owner_id not in (None, self.owner_id):
+                raise KeyError(thread_id)  # not this user's thread
             self.session_id = thread.id
             rows = session.execute(
                 select(ChatMessage).where(ChatMessage.thread_id == thread.id).order_by(ChatMessage.id)
@@ -348,7 +378,7 @@ class ChatSession:
         with get_session() as session:
             thread = session.get(ChatThread, self.session_id)
             if thread is None:
-                thread = ChatThread(id=self.session_id, model=self.model_name)
+                thread = ChatThread(id=self.session_id, model=self.model_name, owner_id=self.owner_id)
                 session.add(thread)
             if not thread.title and title:
                 thread.title = title[:80]
@@ -581,10 +611,27 @@ def _session_payload(session: ChatSession) -> dict[str, Any]:
     return {"type": "session", "session_id": session.session_id, "model": session.model_name}
 
 
+def _ws_user(websocket: WebSocket) -> dict[str, Any] | None:
+    settings = get_settings()
+    if not settings.auth_enabled:
+        return None
+    user_id = websocket.session.get("user_id") if "session" in websocket.scope else None
+    if not user_id:
+        return None
+    with get_session() as db:
+        user = db.get(User, user_id)
+        return {"id": user.id, "email": user.email, "name": user.name, "picture": user.picture_url} if user else None
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
-    session = ChatSession()
+    user = _ws_user(websocket)
+    if get_settings().auth_enabled and user is None:
+        await websocket.send_json({"type": "error", "message": "Authentication required."})
+        await websocket.close(code=4401)
+        return
+    session = ChatSession(owner_id=user["id"] if user else None)
     await websocket.send_json(_session_payload(session))
     try:
         while True:

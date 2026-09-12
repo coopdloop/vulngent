@@ -7,7 +7,7 @@ from rich.console import Console as RichConsole
 from rich.markup import escape
 from rich.table import Table
 
-from vulngent.db.session import get_session, init_db
+from vulngent.db.session import ensure_schema, get_session, init_db
 
 app = typer.Typer(help="vulngent: an agentic vulnerability remediation ledger.")
 console = RichConsole()
@@ -18,6 +18,16 @@ def initdb() -> None:
     """Create the database tables (safe to re-run)."""
     init_db()
     console.print("[green]Database ready.[/green]")
+
+
+@app.command()
+def migrate() -> None:
+    """Apply lightweight schema migrations to an existing database (safe to re-run).
+
+    Adds new tables (e.g. users) and columns (chat_threads.owner_id) without
+    touching existing data."""
+    ensure_schema()
+    console.print("[green]Schema up to date.[/green]")
 
 
 @app.command(name="import")

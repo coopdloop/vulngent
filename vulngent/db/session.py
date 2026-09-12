@@ -28,12 +28,18 @@ def ensure_schema() -> None:
     create_all only creates missing tables, never alters them; keep lightweight
     ADD COLUMN migrations here so an existing SQLite file keeps working.
     Currently only applied on SQLite (local dev default)."""
+    # New tables (e.g. users) are safe to create everywhere; create_all only adds
+    # what's missing and never touches existing tables.
+    Base.metadata.create_all(engine)
     if engine.url.get_backend_name() != "sqlite":
         return
     with engine.begin() as conn:
         rows = conn.exec_driver_sql("PRAGMA table_info(chat_threads)").all()
-        if rows and "archived_at" not in {r[1] for r in rows}:
+        cols = {r[1] for r in rows}
+        if rows and "archived_at" not in cols:
             conn.exec_driver_sql("ALTER TABLE chat_threads ADD COLUMN archived_at DATETIME")
+        if rows and "owner_id" not in cols:
+            conn.exec_driver_sql("ALTER TABLE chat_threads ADD COLUMN owner_id INTEGER")
 
 
 @contextmanager

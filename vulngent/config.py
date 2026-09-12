@@ -18,6 +18,19 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "anthropic/claude-sonnet-4.5"
 
+    # --- Auth (Google OAuth / Sign in with Google) ---
+    # If google_client_id is empty, auth is bypassed entirely (local-dev friendly).
+    google_client_id: str = ""
+    # Optional Workspace lock-down: only accept accounts on this domain (e.g. "example.com").
+    google_allowed_domain: str = ""
+    # Secret used to sign the session cookie. Auto-generated per-process if unset;
+    # set a stable value in prod so sessions survive restarts.
+    session_secret: str = ""
+
+    @property
+    def auth_enabled(self) -> bool:
+        return bool(self.google_client_id)
+
     # --- GitHub ---
     github_token: str = ""
 

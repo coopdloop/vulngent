@@ -216,6 +216,22 @@ class Commitment(Base):
     stakeholder: Mapped[Stakeholder | None] = relationship()
 
 
+class User(Base):
+    """An authenticated user (via Sign in with Google)."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    google_sub: Mapped[str] = mapped_column(String(255), unique=True, index=True)  # Google's stable subject id
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    picture_url: Mapped[str] = mapped_column(String(1000), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_login_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    threads: Mapped[list["ChatThread"]] = relationship(back_populates="owner")
+
+
 class ChatThread(Base):
     """A persisted chat session with the conversational agent."""
 
@@ -225,10 +241,12 @@ class ChatThread(Base):
     title: Mapped[str] = mapped_column(String(200), default="")
     model: Mapped[str] = mapped_column(String(200), default="")
     agent_state: Mapped[str] = mapped_column(Text, default="")  # JSON from AssistantAgent.save_state()
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
     archived_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
+    owner: Mapped["User | None"] = relationship(back_populates="threads")
     messages: Mapped[list["ChatMessage"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
     mentions: Mapped[list["ChatMention"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
 

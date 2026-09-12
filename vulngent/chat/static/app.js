@@ -26,6 +26,9 @@ let socket = null;
 let reconnectTimer = null;
 let sessionId = null;
 let modelName = null;
+let authEnabled = false;
+let currentUser = null; // { id, email, name, picture } when signed in
+let authReady = false;  // true once we've resolved auth state and (if needed) signed in
 let sessionUsage = { input_tokens: 0, output_tokens: 0 };
 let inspectorCalls = [];
 const INSPECTOR_KEY = "vulngent.inspector.collapsed";
@@ -150,7 +153,155 @@ function connect() {
   });
   socket.addEventListener("error", () => updateStatus("offline"));
 }
-connect();
+
+// ==== Auth ====
+const loginOverlayEl = document.getElementById("login-overlay");
+const googleBtnEl = document.getElementById("google-signin-btn");
+const loginErrorEl = document.getElementById("login-error");
+const profileCardEl = document.getElementById("profile-card");
+const profileAvatarEl = document.getElementById("profile-avatar");
+const profileNameEl = document.getElementById("profile-name");
+const profileEmailEl = document.getElementById("profile-email");
+const logoutBtn = document.getElementById("logout-btn");
+
+let googleClientId = "";
+
+async function initAuth() {
+  try {
+    const res = await fetch("/api/auth/me");
+    const data = await res.json();
+    authEnabled = !!data.enabled;
+    currentUser = data.user || null;
+  } catch (err) {
+    authEnabled = false;
+    currentUser = null;
+  }
+
+  if (!authEnabled) {
+    // Auth off: fully open, behave exactly as before.
+    hideLogin();
+    renderProfile();
+    startApp();
+    return;
+  }
+
+  if (currentUser) {
+    hideLogin();
+    renderProfile();
+    startApp();
+    return;
+  }
+
+  // Auth on but not signed in: show the Google button, don't open the socket yet.
+  try {
+    const cfg = await (await fetch("/api/auth/config")).json();
+    googleClientId = cfg.client_id || "";
+  } catch (err) {
+    googleClientId = "";
+  }
+  showLogin();
+  renderProfile();
+}
+
+function startApp() {
+  if (authReady) return;
+  authReady = true;
+  connect();
+  loadSessions();
+}
+
+function showLogin() {
+  loginOverlayEl.classList.remove("hidden");
+  loginOverlayEl.classList.add("flex");
+  renderGoogleButton();
+}
+
+function hideLogin() {
+  loginOverlayEl.classList.add("hidden");
+  loginOverlayEl.classList.remove("flex");
+}
+
+function renderGoogleButton() {
+  if (!googleClientId) {
+    loginErrorEl.textContent = "Server auth is enabled but no Google client id is configured.";
+    loginErrorEl.classList.remove("hidden");
+    return;
+  }
+  // GIS may still be loading; retry until google.accounts is ready.
+  if (!(window.google && google.accounts && google.accounts.id)) {
+    setTimeout(renderGoogleButton, 150);
+    return;
+  }
+  google.accounts.id.initialize({
+    client_id: googleClientId,
+    callback: onGoogleCredential,
+  });
+  googleBtnEl.innerHTML = "";
+  google.accounts.id.renderButton(googleBtnEl, {
+    theme: "outline",
+    size: "large",
+    shape: "pill",
+    text: "signin_with",
+    logo_alignment: "left",
+  });
+}
+
+async function onGoogleCredential(response) {
+  loginErrorEl.classList.add("hidden");
+  try {
+    const res = await fetch("/api/auth/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: response.credential }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Sign-in failed.");
+    }
+    const data = await res.json();
+    currentUser = data.user;
+    hideLogin();
+    renderProfile();
+    startApp();
+  } catch (err) {
+    loginErrorEl.textContent = err.message || "Sign-in failed.";
+    loginErrorEl.classList.remove("hidden");
+  }
+}
+
+function renderProfile() {
+  if (!authEnabled || !currentUser) {
+    profileCardEl.classList.add("hidden");
+    profileCardEl.classList.remove("flex");
+    return;
+  }
+  profileCardEl.classList.remove("hidden");
+  profileCardEl.classList.add("flex");
+  profileNameEl.textContent = currentUser.name || currentUser.email || "Signed in";
+  profileEmailEl.textContent = currentUser.email || "";
+  if (currentUser.picture) {
+    profileAvatarEl.src = currentUser.picture;
+    profileAvatarEl.classList.remove("hidden");
+  } else {
+    profileAvatarEl.removeAttribute("src");
+  }
+}
+
+if (logoutBtn) {
+  logoutBtn.addEventListener("click", async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch (err) {
+      /* ignore */
+    }
+    if (window.google && google.accounts && google.accounts.id) {
+      google.accounts.id.disableAutoSelect();
+    }
+    window.location.reload();
+  });
+}
+
+initAuth();
 
 function handleSocketMessage(event) {
   const payload = JSON.parse(event.data);
@@ -480,15 +631,33 @@ function shortModelName(model) {
   return model.split("/").pop();
 }
 
+function userAvatar() {
+  const pic = currentUser && currentUser.picture;
+  if (pic) {
+    return `<img src="${escapeHTML(pic)}" alt="" referrerpolicy="no-referrer" class="h-7 w-7 shrink-0 rounded-lg object-cover" />`;
+  }
+  const initials = userInitials();
+  return `<span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-[11px] font-semibold text-white">${escapeHTML(initials)}</span>`;
+}
+
+function userInitials() {
+  const src = (currentUser && (currentUser.name || currentUser.email)) || "";
+  const parts = src.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "You";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 function appendUserMessage(text) {
   hideEmptyState();
   const wrapper = document.createElement("article");
-  wrapper.className = "chat-message flex justify-end";
+  wrapper.className = "chat-message flex items-start justify-end gap-2.5";
   const bubble = document.createElement("div");
   bubble.className =
     "bubble-user max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-tr-sm bg-slate-900 px-3.5 py-2.5 text-sm leading-relaxed text-slate-50 shadow-sm";
   bubble.textContent = text;
   wrapper.appendChild(bubble);
+  wrapper.insertAdjacentHTML("beforeend", userAvatar());
   historyEl.appendChild(wrapper);
   scrollToBottom();
 }
