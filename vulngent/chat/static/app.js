@@ -862,7 +862,7 @@ function drawWires() {
     // Orthogonal (PCB-style) routing in the reserved gutter: staggered vertical
     // channel per chip, then a sideways eject into the inspector card.
     const idx = Number(chip.dataset.wireIndex || 0);
-    const mx = Math.max(sx + 14, tx - 22 - (idx % 5) * 9);
+    const mx = Math.max(sx + 14, tx - 30 - (idx % 5) * 9);
     const color = wireColor(chip.dataset.callId);
     markup += `<path class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" d="${orthoPath(sx, sy, tx, ty, mx)}" stroke="${color}" />`;
     // Ports on both ends: a terminal box where the cable leaves the bubble and
