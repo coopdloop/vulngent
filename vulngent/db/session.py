@@ -22,6 +22,20 @@ def init_db() -> None:
     Base.metadata.create_all(engine)
 
 
+def ensure_schema() -> None:
+    """Idempotent column adds for databases created before a column existed.
+
+    create_all only creates missing tables, never alters them; keep lightweight
+    ADD COLUMN migrations here so an existing SQLite file keeps working.
+    Currently only applied on SQLite (local dev default)."""
+    if engine.url.get_backend_name() != "sqlite":
+        return
+    with engine.begin() as conn:
+        rows = conn.exec_driver_sql("PRAGMA table_info(chat_threads)").all()
+        if rows and "archived_at" not in {r[1] for r in rows}:
+            conn.exec_driver_sql("ALTER TABLE chat_threads ADD COLUMN archived_at DATETIME")
+
+
 @contextmanager
 def get_session() -> Iterator[Session]:
     session = SessionLocal()

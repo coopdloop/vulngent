@@ -74,7 +74,10 @@
 
       <!-- Chat sessions -->
       <div class="mt-6 flex min-h-0 flex-1 flex-col px-3">
-        <p class="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Chats</p>
+        <div class="flex items-center justify-between px-2 pb-2">
+          <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Chats</p>
+          <button id="chats-archived-toggle" class="text-[10px] font-medium text-slate-400 transition hover:text-indigo-600">Show archived</button>
+        </div>
         <div id="chat-list" class="nice-scroll min-h-0 flex-1 space-y-0.5 overflow-y-auto">
           <p class="px-3 py-2 text-xs text-slate-400">No previous chats yet.</p>
         </div>

@@ -1179,9 +1179,17 @@ function escapeHTML(str) {
 // ==== Session list (sidebar) ====
 const chatListEl = document.getElementById("chat-list");
 
+let showArchivedChats = false;
+
+document.getElementById("chats-archived-toggle").addEventListener("click", () => {
+  showArchivedChats = !showArchivedChats;
+  document.getElementById("chats-archived-toggle").textContent = showArchivedChats ? "Show active" : "Show archived";
+  loadSessions();
+});
+
 async function loadSessions() {
   try {
-    const res = await fetch("/api/sessions");
+    const res = await fetch(`/api/sessions${showArchivedChats ? "?archived=true" : ""}`);
     if (!res.ok) return;
     renderSessionList((await res.json()).sessions || []);
   } catch (err) {
@@ -1191,26 +1199,75 @@ async function loadSessions() {
 
 function renderSessionList(sessions) {
   if (!sessions.length) {
-    chatListEl.innerHTML = '<p class="px-3 py-2 text-xs text-slate-400">No previous chats yet.</p>';
+    chatListEl.innerHTML = `<p class="px-3 py-2 text-xs text-slate-400">${showArchivedChats ? "No archived chats." : "No previous chats yet."}</p>`;
     return;
   }
   chatListEl.innerHTML = "";
   sessions.forEach((s) => {
-    const btn = document.createElement("button");
     const active = s.id === sessionId;
-    btn.className = `flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left text-xs transition ${
-      active ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-100"
-    }`;
-    btn.innerHTML = `
-      <svg class="mt-0.5 shrink-0 ${active ? "text-indigo-400" : "text-slate-300"}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
-      <span class="min-w-0 flex-1">
-        <span class="block truncate font-medium">${escapeHTML(s.title)}</span>
-        <span class="mt-0.5 block font-mono text-[10px] ${active ? "text-indigo-400" : "text-slate-400"}">${s.id} · ${timeAgo(s.updated_at)} · ${s.message_count} msg</span>
+    const row = document.createElement("div");
+    row.className = "group flex items-start gap-0.5";
+    row.innerHTML = `
+      <button class="chat-open flex min-w-0 flex-1 items-start gap-2 rounded-lg px-2 py-2 text-left text-xs transition ${
+        active ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-100"
+      }" title="Resume chat ${escapeHTML(s.id)}">
+        <svg class="mt-0.5 shrink-0 ${active ? "text-indigo-400" : "text-slate-300"}" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+        <span class="min-w-0 flex-1">
+          <span class="block truncate font-medium">${escapeHTML(s.title)}</span>
+          <span class="mt-0.5 block font-mono text-[10px] ${active ? "text-indigo-400" : "text-slate-400"}">${s.id} · ${timeAgo(s.updated_at)} · ${s.message_count} msg</span>
+        </span>
+      </button>
+      <span class="mt-1 flex shrink-0 flex-col gap-0.5 opacity-0 transition group-hover:opacity-100">
+        <button class="chat-action rounded-md p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-600" data-act="${showArchivedChats ? "unarchive" : "archive"}" title="${showArchivedChats ? "Restore" : "Archive"}">
+          ${showArchivedChats
+            ? '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 8 12 3 21 8" /><line x1="21" y1="8" x2="21" y2="17" /><polyline points="21 17 12 21 3 17" /><line x1="3" y1="17" x2="3" y2="8" /></svg>'
+            : '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" /></svg>'}
+        </button>
+        <button class="chat-action rounded-md p-1 text-slate-400 hover:bg-red-50 hover:text-red-500" data-act="delete" title="Delete">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>
+        </button>
       </span>`;
-    btn.title = `Resume chat ${s.id}`;
-    btn.addEventListener("click", () => resumeChat(s.id));
-    chatListEl.appendChild(btn);
+    row.querySelector(".chat-open").addEventListener("click", () => resumeChat(s.id));
+    row.querySelectorAll(".chat-action").forEach((actionBtn) => {
+      actionBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (actionBtn.dataset.act === "delete") {
+          deleteChatSession(s.id, s.title);
+        } else {
+          archiveChatSession(s.id, actionBtn.dataset.act === "archive");
+        }
+      });
+    });
+    chatListEl.appendChild(row);
   });
+}
+
+async function archiveChatSession(id, archived) {
+  try {
+    const res = await fetch(`/api/sessions/${id}/archive?archived=${archived}`, { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    showToast({ title: archived ? "Chat archived" : "Chat restored" });
+  } catch (err) {
+    showToast({ title: "Archive failed" });
+  }
+  loadSessions();
+}
+
+async function deleteChatSession(id, title) {
+  if (!confirm(`Delete chat "${title || id}" permanently? This removes all its messages.`)) return;
+  try {
+    const res = await fetch(`/api/sessions/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    showToast({ title: "Chat deleted" });
+    // Deleting the live session would let the next message silently recreate it
+    // (persist_user_message creates the row when missing), so start fresh first.
+    if (id === sessionId && socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "new_chat" }));
+    }
+  } catch (err) {
+    showToast({ title: "Delete failed" });
+  }
+  loadSessions();
 }
 
 function timeAgo(iso) {

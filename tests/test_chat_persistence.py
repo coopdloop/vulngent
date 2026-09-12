@@ -108,3 +108,46 @@ def test_split_sections_no_markers():
     clean, sections = server.split_sections("Just a plain reply.")
     assert clean == "Just a plain reply."
     assert sections == []
+
+
+def test_collect_sessions_filters_archived(chat_db):
+    keep = server.ChatSession()
+    keep.persist_user_message("keep me")
+    archived = server.ChatSession()
+    archived.persist_user_message("archive me")
+    with chat_db() as s:
+        thread = s.get(ChatThread, archived.session_id)
+        thread.archived_at = dt.datetime.now(dt.timezone.utc)
+        s.commit()
+
+    active = server._collect_sessions(archived=False)
+    archived_listing = server._collect_sessions(archived=True)
+    assert keep.session_id in [t["id"] for t in active["sessions"]]
+    assert archived.session_id not in [t["id"] for t in active["sessions"]]
+    assert archived.session_id in [t["id"] for t in archived_listing["sessions"]]
+
+
+def test_archive_and_delete_endpoints(chat_db):
+    from fastapi.testclient import TestClient
+
+    session = server.ChatSession()
+    session.persist_user_message("to delete")
+
+    with TestClient(server.app) as client:
+        res = client.post(f"/api/sessions/{session.session_id}/archive")
+        assert res.status_code == 200
+        assert res.json() == {"ok": True, "archived": True}
+        res = client.post(f"/api/sessions/{session.session_id}/archive?archived=false")
+        assert res.json() == {"ok": True, "archived": False}
+
+        res = client.post("/api/sessions/nope1234/archive")
+        assert res.status_code == 404
+
+        res = client.delete(f"/api/sessions/{session.session_id}")
+        assert res.status_code == 200
+        res = client.delete(f"/api/sessions/{session.session_id}")
+        assert res.status_code == 404
+
+    with chat_db() as s:
+        assert s.get(ChatThread, session.session_id) is None
+        assert s.execute(select(ChatMessage).where(ChatMessage.thread_id == session.session_id)).scalars().all() == []

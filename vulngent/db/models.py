@@ -227,6 +227,7 @@ class ChatThread(Base):
     agent_state: Mapped[str] = mapped_column(Text, default="")  # JSON from AssistantAgent.save_state()
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+    archived_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
     messages: Mapped[list["ChatMessage"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
     mentions: Mapped[list["ChatMention"]] = relationship(back_populates="thread", cascade="all, delete-orphan")

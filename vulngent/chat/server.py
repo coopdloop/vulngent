@@ -29,7 +29,7 @@ from sqlalchemy import select
 from vulngent.config import get_settings
 from vulngent.db import repository as repo
 from vulngent.db.models import Asset, ChatMention, ChatMessage, ChatThread, Vulnerability, VulnStatus
-from vulngent.db.session import get_session
+from vulngent.db.session import ensure_schema, get_session
 from vulngent.report_data import collect_report_data
 from vulngent.reporting import SUPPORTED_FORMATS, render_report
 
@@ -39,6 +39,7 @@ INDEX_HTML = STATIC_DIR / "index.html"
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(settings_router)
+ensure_schema()
 
 WRITE_TOOL_REGISTRY: dict[str, Callable[..., str]] = {
     "create_github_issue_for_vuln": agent_tools.create_github_issue_for_vuln,
@@ -89,19 +90,22 @@ async def homepage() -> FileResponse:
 
 
 @app.get("/api/sessions")
-async def list_chat_sessions() -> dict[str, Any]:
-    return await asyncio.to_thread(_collect_sessions)
+async def list_chat_sessions(archived: bool = False) -> dict[str, Any]:
+    return await asyncio.to_thread(_collect_sessions, archived)
 
 
-def _collect_sessions() -> dict[str, Any]:
+def _collect_sessions(archived: bool = False) -> dict[str, Any]:
     with get_session() as session:
-        threads = session.execute(select(ChatThread).order_by(ChatThread.updated_at.desc()).limit(50)).scalars().all()
+        query = select(ChatThread).order_by(ChatThread.updated_at.desc()).limit(50)
+        query = query.where(ChatThread.archived_at.isnot(None)) if archived else query.where(ChatThread.archived_at.is_(None))
+        threads = session.execute(query).scalars().all()
         return {
             "sessions": [
                 {
                     "id": t.id,
                     "title": t.title or t.id,
                     "model": t.model,
+                    "archived": t.archived_at is not None,
                     "created_at": t.created_at.isoformat() if t.created_at else None,
                     "updated_at": t.updated_at.isoformat() if t.updated_at else None,
                     "message_count": len(t.messages),
@@ -109,6 +113,38 @@ def _collect_sessions() -> dict[str, Any]:
                 for t in threads
             ]
         }
+
+
+@app.post("/api/sessions/{thread_id}/archive")
+async def archive_chat_session(thread_id: str, archived: bool = True) -> dict[str, Any]:
+    def _set() -> bool:
+        with get_session() as session:
+            thread = session.get(ChatThread, thread_id)
+            if thread is None:
+                return False
+            thread.archived_at = datetime.now(timezone.utc) if archived else None
+            session.commit()
+            return True
+
+    if not await asyncio.to_thread(_set):
+        raise HTTPException(status_code=404, detail=f"Unknown chat session '{thread_id}'.")
+    return {"ok": True, "archived": archived}
+
+
+@app.delete("/api/sessions/{thread_id}")
+async def delete_chat_session(thread_id: str) -> dict[str, Any]:
+    def _delete() -> bool:
+        with get_session() as session:
+            thread = session.get(ChatThread, thread_id)
+            if thread is None:
+                return False
+            session.delete(thread)  # cascades to messages + mentions
+            session.commit()
+            return True
+
+    if not await asyncio.to_thread(_delete):
+        raise HTTPException(status_code=404, detail=f"Unknown chat session '{thread_id}'.")
+    return {"ok": True}
 
 
 @app.get("/api/dashboard")
