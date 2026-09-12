@@ -879,7 +879,16 @@ toolCallsEl.addEventListener("scroll", scheduleWires, { passive: true });
 
 // ==== Tool inspector ====
 function updateInspector(calls) {
-  inspectorCalls = calls ?? [];
+  // Accumulate across responses instead of replacing: each assistant bubble's tool
+  // chips stay wired to their inspector cards for the whole session. A later message
+  // (e.g. a confirmed write) must not evict cards from earlier messages.
+  const seen = new Set(inspectorCalls.map((c) => c.call_id));
+  for (const call of calls ?? []) {
+    if (!seen.has(call.call_id)) {
+      inspectorCalls.push(call);
+      seen.add(call.call_id);
+    }
+  }
   renderInspector();
 }
 

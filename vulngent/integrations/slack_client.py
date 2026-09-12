@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from vulngent.config import get_settings
+
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)]+)\)")
+_MD_HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$", re.MULTILINE)
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*|__(.+?)__", re.DOTALL)
+
+
+def to_slack_mrkdwn(text: str) -> str:
+    """Convert common Markdown to Slack mrkdwn (bold *x*, no headings, <url|label> links)."""
+    text = _MD_LINK_RE.sub(lambda m: f"<{m.group(2)}|{m.group(1)}>", text)
+    text = _MD_HEADING_RE.sub(lambda m: m.group(1).strip(), text)
+    return _MD_BOLD_RE.sub(lambda m: f"*{m.group(1) or m.group(2)}*", text)
 
 
 class SlackNotConfigured(RuntimeError):
@@ -31,7 +43,7 @@ class SlackClient:
 
     def send_message(self, channel: str, text: str, thread_ts: str | None = None) -> str:
         try:
-            resp = self._client.chat_postMessage(channel=channel, text=text, thread_ts=thread_ts)
+            resp = self._client.chat_postMessage(channel=channel, text=to_slack_mrkdwn(text), thread_ts=thread_ts)
         except SlackApiError as exc:
             raise RuntimeError(f"Slack send failed: {exc.response['error']}") from exc
         return resp["ts"]
