@@ -347,6 +347,8 @@ details.thoughts summary::-webkit-details-marker {
   fill: none;
   stroke-width: 1.6;
   opacity: 0.42;
+  stroke-linejoin: round;
+  stroke-linecap: round;
   transition: opacity 0.15s ease, stroke-width 0.15s ease;
   vector-effect: non-scaling-stroke;
 }

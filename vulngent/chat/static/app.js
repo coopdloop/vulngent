@@ -563,11 +563,14 @@ function buildToolChip(call, idx, entry) {
   chip.type = "button";
   chip.className = `tool-chip${call.is_error ? " tool-chip-err" : ""}`;
   chip.dataset.callId = call.call_id;
+  chip.dataset.wireIndex = String(idx);
+  chip.style.color = color;
+  chip.style.borderColor = color;
+  chip.style.background = `color-mix(in srgb, ${color} 10%, white)`;
   const argPreview = shortArgPreview(call);
   chip.title = `${call.name}\n${argPreview ? argPreview + `\n` : ""}#${idx + 1} · ${call.result || ""}`.slice(0, 300);
   const dot = document.createElement("span");
   dot.className = "wire-dot";
-  dot.style.background = color;
   const label = document.createElement("span");
   label.textContent = call.name.replace(/_/g, " ");
   chip.appendChild(dot);
@@ -797,6 +800,24 @@ const wireLayerEl = document.getElementById("wire-layer");
 const WIRE_COLORS = ["#6366F1", "#8B5CF6", "#7C3AED", "#A78BFA", "#4F46E5", "#9333EA", "#6D28D9", "#3B82F6"];
 
 
+// Right-angle trace with rounded corners: chip -> channel -> card.
+function orthoPath(sx, sy, tx, ty, mx) {
+  const r = 7;
+  const dy = ty - sy;
+  if (Math.abs(dy) < 2 * r || mx >= tx - 2 * r) {
+    return `M ${sx} ${sy} L ${tx} ${sy}`; // near-straight: single horizontal run
+  }
+  const s = Math.sign(dy);
+  return [
+    `M ${sx} ${sy}`,
+    `L ${mx - r} ${sy}`,
+    `Q ${mx} ${sy} ${mx} ${sy + s * r}`,
+    `L ${mx} ${ty - s * r}`,
+    `Q ${mx} ${ty} ${mx + r} ${ty}`,
+    `L ${tx} ${ty}`,
+  ].join(" ");
+}
+
 function wireColor(callId) {
   let hash = 0;
   const str = String(callId || "");
@@ -832,9 +853,12 @@ function drawWires() {
     const tx = tr.left - frameRect.left;
     const ty = tr.top + tr.height / 2 - frameRect.top;
     if (tx <= sx) return; // card left of chip (inspector closed/overlaid) -> skip
-    const dx = Math.max(48, (tx - sx) * 0.45);
+    // Orthogonal (PCB-style) routing: stagger the vertical channel by the chip's
+    // index within its bubble so multiple traces don't overlap.
+    const idx = Number(chip.dataset.wireIndex || 0);
+    const mx = sx + 24 + (idx % 5) * 9;
     const color = wireColor(chip.dataset.callId);
-    markup += `<path class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" d="M ${sx} ${sy} C ${sx + dx} ${sy}, ${tx - dx} ${ty}, ${tx} ${ty}" stroke="${color}" />`;
+    markup += `<path class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" d="${orthoPath(sx, sy, tx, ty, mx)}" stroke="${color}" />`;
     markup += `<circle class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" cx="${sx}" cy="${sy}" r="2.4" fill="${color}" />`;
     // Connection port on the inspector end: little terminal box around the cable tip.
     markup += `<rect class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" x="${tx - 4}" y="${ty - 5}" width="4" height="10" rx="1.2" fill="none" stroke="${color}" />`;
