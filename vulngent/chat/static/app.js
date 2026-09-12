@@ -846,21 +846,29 @@ function drawWires() {
   document.querySelectorAll(".tool-chip[data-call-id]").forEach((chip) => {
     const card = document.getElementById(`tool-card-${cssEscape(chip.dataset.callId)}`);
     if (!card || !historyEl.contains(chip)) return;
+    // Anchor to the bubble's right edge (at the chip's y) so the trace only ever
+    // crosses the reserved wire gutter, never text. Chips highlight the wire; the
+    // bubble edge is the physical exit point.
+    const bubbleEl = chip.closest(".agent-bubble") || chip.closest(".chat-msg-item");
+    if (!bubbleEl) return;
     const sr = chip.getBoundingClientRect();
+    const br = bubbleEl.getBoundingClientRect();
     const tr = card.getBoundingClientRect();
-    const sx = sr.right - frameRect.left;
+    const sx = br.right - frameRect.left;
     const sy = sr.top + sr.height / 2 - frameRect.top;
     const tx = tr.left - frameRect.left;
     const ty = tr.top + tr.height / 2 - frameRect.top;
     if (tx <= sx) return; // card left of chip (inspector closed/overlaid) -> skip
-    // Orthogonal (PCB-style) routing: stagger the vertical channel by the chip's
-    // index within its bubble so multiple traces don't overlap.
+    // Orthogonal (PCB-style) routing in the reserved gutter: staggered vertical
+    // channel per chip, then a sideways eject into the inspector card.
     const idx = Number(chip.dataset.wireIndex || 0);
-    const mx = sx + 24 + (idx % 5) * 9;
+    const mx = Math.max(sx + 14, tx - 22 - (idx % 5) * 9);
     const color = wireColor(chip.dataset.callId);
     markup += `<path class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" d="${orthoPath(sx, sy, tx, ty, mx)}" stroke="${color}" />`;
-    markup += `<circle class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" cx="${sx}" cy="${sy}" r="2.4" fill="${color}" />`;
-    // Connection port on the inspector end: little terminal box around the cable tip.
+    // Ports on both ends: a terminal box where the cable leaves the bubble and
+    // where it lands on the inspector card.
+    markup += `<rect class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" x="${sx - 2}" y="${sy - 5}" width="4" height="10" rx="1.2" fill="none" stroke="${color}" />`;
+    markup += `<circle class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" cx="${sx + 1}" cy="${sy}" r="2.1" fill="${color}" />`;
     markup += `<rect class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" x="${tx - 4}" y="${ty - 5}" width="4" height="10" rx="1.2" fill="none" stroke="${color}" />`;
     markup += `<circle class="wire-cable" data-call-id="${cssEscape(chip.dataset.callId)}" cx="${tx - 2}" cy="${ty}" r="2.1" fill="${color}" />`;
   });
