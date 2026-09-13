@@ -24,6 +24,14 @@ dependencies = [
     "uvicorn[standard]>=0.24.0",
 ]
 
+[project.optional-dependencies]
+# Trace export into Arize Phoenix. Reading usage from Phoenix needs no extra deps
+# (plain REST/GraphQL over urllib); this is only for emitting vulngent's own spans.
+phoenix = [
+    "arize-phoenix-otel>=0.6.1",
+    "openinference-instrumentation-openai>=0.1.18",
+]
+
 [project.scripts]
 vulngent = "vulngent.cli:app"
 

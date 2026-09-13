@@ -31,12 +31,17 @@ stakeholders, and keep the ledger current on its own.
 - **Tools:** `vulngent/agents/tools.py` — plain typed Python functions wrapping the
   repository + integrations, handed to the agents as-is (AutoGen builds the tool schema
   from type hints + docstring).
-- **Reporting & analytics:** `report_data.py` (ledger snapshot) and `usage_data.py`
-  (agent usage, spend, and modelled value) each build a plain dataclass snapshot that
-  `reporting.py` renders to markdown/PDF/DOCX, so the web dashboard, the API, and the
-  exports all read the same numbers. Usage/cost is derived from token counts already
-  persisted per assistant turn; "value" is analyst time displaced, priced with the
-  `AGENT_*` settings (Settings → Agent economics).
+- **Reporting & analytics:** `report_data.py` (ledger snapshot), `ops_data.py`
+  (remediation throughput/MTTR/SLA) and `usage_data.py` (agent usage, spend, and modelled
+  value) each build a plain dataclass snapshot that `reporting.py` renders to
+  markdown/PDF/DOCX, so the web dashboard, the API, and the exports all read the same
+  numbers. Usage/cost is derived from token counts already persisted per assistant turn;
+  "value" is analyst time displaced, priced with the `AGENT_*` settings (Settings → Agent
+  economics).
+- **Observability (optional):** `integrations/phoenix_client.py` reads *observed* token
+  usage and cost from an [Arize Phoenix](https://github.com/Arize-ai/phoenix) deployment,
+  and `tracing.py` exports vulngent's own LLM spans to it. See
+  [Observability with Arize Phoenix](#observability-with-arize-phoenix).
 
 ## Setup
 
@@ -76,6 +81,57 @@ uv run vulngent run-cycle
 `vulngent run-cycle` streams the agents' conversation and tool calls to the terminal. The
 triage agent may pause and ask you (the analyst) a direct question when it needs help
 confirming reachability — answer at the `your answer>` prompt.
+
+## Dashboards
+
+The **Dashboard** page has three tabs, each backed by its own endpoint and data module:
+
+| Tab | Answers | Source |
+| --- | --- | --- |
+| **Security posture** | What's broken right now — open/overdue counts, severity mix, top priority, commitments due | `/api/dashboard` |
+| **Remediation ops** | Is the program working — MTTR, SLA compliance, intake vs. closure, backlog aging, owner accountability | `/api/ops` (`ops_data.py`) |
+| **Agent usage & cost** | What the agents cost and returned — turns, tokens, tool calls, spend by model, modelled ROI | `/api/usage` (`usage_data.py`) |
+
+Tabs load lazily on first open and refresh when you re-enter the view.
+
+## Observability with Arize Phoenix
+
+vulngent's built-in usage numbers come from token counts the chat server records, priced
+with the static `AGENT_COST_*` rates. That misses anything outside the web UI (CLI runs,
+`run-cycle`, retries) and can't price models it doesn't know. Wiring up
+[Phoenix](https://github.com/Arize-ai/phoenix) gives you **true observed usage**, computed
+from traces with Phoenix's own model pricing table, shown side by side with vulngent's own
+figures on the *Agent usage & cost* tab.
+
+**Reading usage** needs no extra dependencies (plain REST + GraphQL). Point vulngent at any
+Phoenix deployment — Settings → *Arize Phoenix*, or `.env`:
+
+```bash
+PHOENIX_ENDPOINT=http://localhost:6006
+PHOENIX_API_KEY=            # blank for self-hosted Phoenix with auth disabled
+PHOENIX_PROJECT_NAME=vulngent
+```
+
+Use **Settings → Arize Phoenix → Run check** to verify the endpoint, credentials, and that
+the configured project exists.
+
+**Writing traces** (so vulngent's own model calls show up in Phoenix) needs the extra:
+
+```bash
+uv sync --extra phoenix
+```
+
+then set `PHOENIX_TRACING_ENABLED=true` and restart. Without the extra, tracing logs a
+warning and stays off — it never breaks the app. Spin up a local Phoenix with:
+
+```bash
+uvx --with arize-phoenix phoenix serve   # http://localhost:6006
+```
+
+Phoenix exposes project-level cost/token rollups over GraphQL only (not REST — see
+[Arize-ai/phoenix#11008](https://github.com/Arize-ai/phoenix/issues/11008)), so the client
+uses GraphQL for totals and the REST spans endpoint for the per-model breakdown. The
+per-model rows are a bounded sample of recent spans; the totals cover the whole window.
 
 ## Authentication (Sign in with Google / Microsoft)
 

@@ -1283,9 +1283,51 @@ const SEVERITY_COLORS = {
 };
 
 const dashboardUpdatedEl = document.getElementById("dashboard-updated");
-document.getElementById("dashboard-refresh").addEventListener("click", () => loadDashboard());
+document.getElementById("dashboard-refresh").addEventListener("click", () => loadPosture());
 
-async function loadDashboard() {
+// ==== Dashboard tabs ====
+// Each tab loads lazily on first open, so switching views doesn't fan out three
+// aggregate queries the user may never look at.
+const DASH_TABS = {
+  posture: { load: () => loadPosture(), subtitle: "Ledger posture at a glance." },
+  operations: { load: () => loadOps(), subtitle: "Throughput, MTTR, and SLA performance." },
+  usage: { load: () => loadUsage(), subtitle: "What the agents cost and what they returned." },
+};
+const DASH_TAB_ACTIVE = ["bg-white", "text-indigo-700", "shadow-sm", "ring-1", "ring-slate-200"];
+const DASH_TAB_IDLE = ["text-slate-500", "hover:text-slate-700"];
+let currentDashTab = "posture";
+const loadedDashTabs = new Set();
+
+function setDashTab(tab, { force = false } = {}) {
+  if (!DASH_TABS[tab]) return;
+  currentDashTab = tab;
+  for (const name of Object.keys(DASH_TABS)) {
+    document.getElementById(`dash-panel-${name}`).classList.toggle("hidden", name !== tab);
+  }
+  document.querySelectorAll(".dash-tab").forEach((btn) => {
+    const active = btn.dataset.dash === tab;
+    btn.classList.remove(...DASH_TAB_ACTIVE, ...DASH_TAB_IDLE);
+    btn.classList.add(...(active ? DASH_TAB_ACTIVE : DASH_TAB_IDLE));
+  });
+  viewSubtitleEl.textContent = DASH_TABS[tab].subtitle;
+  if (force || !loadedDashTabs.has(tab)) {
+    loadedDashTabs.add(tab);
+    DASH_TABS[tab].load();
+  }
+  resetCursor();
+  repositionAgent();
+}
+
+document.querySelectorAll(".dash-tab").forEach((btn) => {
+  btn.addEventListener("click", () => setDashTab(btn.dataset.dash));
+});
+
+function loadDashboard() {
+  // Re-entering the Dashboard view refreshes whichever tab is showing.
+  setDashTab(currentDashTab, { force: true });
+}
+
+async function loadPosture() {
   dashboardUpdatedEl.textContent = "Loading…";
   try {
     const res = await fetch("/api/dashboard");
@@ -1294,7 +1336,6 @@ async function loadDashboard() {
   } catch (err) {
     dashboardUpdatedEl.textContent = "Failed to load dashboard.";
   }
-  loadUsage();
 }
 
 function renderDashboard(data) {
@@ -1372,6 +1413,131 @@ function renderDashboard(data) {
     : '<p class="py-3 text-xs text-slate-400">No commitments due in the next 7 days.</p>';
 }
 
+// ==== Remediation operations ====
+const opsUpdatedEl = document.getElementById("ops-updated");
+const opsWindowEl = document.getElementById("ops-window");
+opsWindowEl.addEventListener("change", () => loadOps());
+
+async function loadOps() {
+  opsUpdatedEl.textContent = "Loading…";
+  try {
+    const res = await fetch(`/api/ops?window_days=${Number(opsWindowEl.value || 90)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    renderOps(await res.json());
+  } catch (err) {
+    opsUpdatedEl.textContent = "Failed to load remediation operations.";
+  }
+}
+
+function pct(value) {
+  return value == null ? "—" : `${Math.round(value * 100)}%`;
+}
+
+function renderOps(data) {
+  const c = data.counts || {};
+  const sla = data.sla || {};
+  opsUpdatedEl.textContent = `${data.window_label || ""} · updated ${feedbackTimestamp(data.generated_at) || "just now"}`;
+
+  const net = c.net_backlog_change ?? 0;
+  document.getElementById("ops-kpis").innerHTML = [
+    ["Remediated", c.remediated ?? 0, "#059669"],
+    ["Discovered", c.discovered ?? 0, "#0F172A"],
+    // Sign matters more than magnitude here: >0 means the backlog grew in-window.
+    ["Net backlog", `${net > 0 ? "+" : ""}${net}`, net > 0 ? "#B91C1C" : "#059669"],
+    ["MTTR", data.mttr_days != null ? `${data.mttr_days}d` : "—", "#4F46E5"],
+    ["SLA met", pct(sla.compliance), sla.compliance != null && sla.compliance < 0.8 ? "#B91C1C" : "#059669"],
+    ["Oldest open", c.oldest_open_days != null ? `${c.oldest_open_days}d` : "—", "#D97706"],
+  ]
+    .map(([label, value, color]) =>
+      usageCard(label, value, color, { kind: "kpi", title: label.toLowerCase(), value: String(value) })
+    )
+    .join("");
+
+  const tp = data.throughput || [];
+  const maxBar = Math.max(...tp.flatMap((p) => [p.discovered, p.remediated]), 0) || 1;
+  document.getElementById("ops-throughput").innerHTML = tp.length
+    ? `<div class="flex h-32 items-end gap-1.5">${tp
+        .map(
+          (p) => `
+          <div class="flex h-full flex-1 items-end gap-0.5" title="week of ${escapeHTML(p.week_start)} · ${p.discovered} in / ${p.remediated} closed">
+            <div class="flex-1 rounded-t bg-slate-300" style="height:${Math.max((p.discovered / maxBar) * 100, p.discovered ? 3 : 0)}%"></div>
+            <div class="flex-1 rounded-t bg-emerald-500" style="height:${Math.max((p.remediated / maxBar) * 100, p.remediated ? 3 : 0)}%"></div>
+          </div>`
+        )
+        .join("")}</div>
+       <div class="mt-2 flex items-center gap-3 text-[10px] text-slate-400">
+         <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-sm bg-slate-300"></span>discovered</span>
+         <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-sm bg-emerald-500"></span>remediated</span>
+         <span class="ml-auto">${escapeHTML(tp[0].week_start)} → ${escapeHTML(tp[tp.length - 1].week_start)}</span>
+       </div>`
+    : '<p class="text-xs text-slate-400">No intake or closures in this window.</p>';
+
+  const aging = data.aging || {};
+  const agingTotal = Object.values(aging).reduce((s, n) => s + n, 0) || 1;
+  const AGING_COLORS = { "0-30d": "#65A30D", "31-60d": "#D97706", "61-90d": "#EA580C", "90d+": "#DC2626" };
+  document.getElementById("ops-aging").innerHTML = Object.entries(aging).length
+    ? Object.entries(aging)
+        .map(
+          ([bucket, n]) => `
+        <div class="dash-item flex items-center gap-3 rounded-lg px-2 py-1.5" data-item='${escapeHTML(JSON.stringify({ kind: "kpi", title: `backlog aged ${bucket}`, value: n }))}'>
+          <span class="w-14 shrink-0 text-xs text-slate-500">${escapeHTML(bucket)}</span>
+          <div class="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+            <div class="h-full rounded-full" style="width:${Math.max((n / agingTotal) * 100, n ? 2 : 0)}%;background:${AGING_COLORS[bucket] || "#64748B"}"></div>
+          </div>
+          <span class="w-8 shrink-0 text-right text-xs font-medium text-slate-600">${n}</span>
+        </div>`
+        )
+        .join("")
+    : '<p class="text-xs text-slate-400">Nothing open.</p>';
+
+  const mttr = data.mttr_by_severity || {};
+  const maxMttr = Math.max(...Object.values(mttr), 0) || 1;
+  document.getElementById("ops-mttr").innerHTML = Object.entries(mttr).length
+    ? Object.entries(mttr)
+        .map(
+          ([sev, days]) => `
+        <div class="dash-item flex items-center gap-3 rounded-lg px-2 py-1.5" data-item='${escapeHTML(JSON.stringify({ kind: "severity", severity: sev, title: `${sev} MTTR`, value: days }))}'>
+          <span class="w-16 shrink-0 text-xs capitalize text-slate-500">${escapeHTML(sev)}</span>
+          <div class="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+            <div class="h-full rounded-full" style="width:${Math.max((days / maxMttr) * 100, 2)}%;background:${SEVERITY_COLORS[sev] || "#64748B"}"></div>
+          </div>
+          <span class="w-12 shrink-0 text-right text-xs font-medium text-slate-600">${days}d</span>
+        </div>`
+        )
+        .join("")
+    : '<p class="text-xs text-slate-400">Nothing has been remediated in this window yet.</p>';
+
+  document.getElementById("ops-owners").innerHTML = (data.owners || []).length
+    ? data.owners
+        .map(
+          (o) => `
+        <div class="dash-item flex items-center gap-2.5 rounded-lg px-2 py-2.5" data-item='${escapeHTML(JSON.stringify({ kind: "kpi", title: `owner ${o.owner}`, value: `${o.open_count} open` }))}'>
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-xs font-medium text-slate-700">${escapeHTML(o.owner)}</p>
+            <p class="truncate text-[10px] text-slate-400">${o.open_count} open · ${o.commitments_open} open commitments · ${o.commitments_met}/${o.commitments_met + o.commitments_missed} kept</p>
+          </div>
+          ${o.reliability != null ? `<span class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${o.reliability >= 0.75 ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}">${pct(o.reliability)} kept</span>` : ""}
+          ${o.overdue_count ? `<span class="shrink-0 rounded-full bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">${o.overdue_count} late</span>` : ""}
+        </div>`
+        )
+        .join("")
+    : '<p class="py-3 text-xs text-slate-400">No owners with open work.</p>';
+
+  document.getElementById("ops-slowest").innerHTML = (data.slowest_closures || []).length
+    ? data.slowest_closures
+        .map(
+          (s) => `
+        <div class="dash-item flex items-center gap-2.5 rounded-lg px-2 py-2.5" data-item='${escapeHTML(JSON.stringify({ kind: "vuln", external_id: s.external_id, title: `${s.external_id} closure`, asset: null }))}'>
+          <span class="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase text-white" style="background:${SEVERITY_COLORS[s.severity] || "#64748B"}">${escapeHTML(s.severity)}</span>
+          <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-600">${escapeHTML(s.external_id)}</span>
+          ${s.within_sla === false ? '<span class="shrink-0 rounded-full bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">missed SLA</span>' : ""}
+          <span class="shrink-0 text-xs font-semibold text-slate-600">${s.days_to_remediate}d</span>
+        </div>`
+        )
+        .join("")
+    : '<p class="py-3 text-xs text-slate-400">No closures in this window.</p>';
+}
+
 // ==== Agent usage, cost & value ====
 const usageUpdatedEl = document.getElementById("usage-updated");
 const usageWindowEl = document.getElementById("usage-window");
@@ -1398,6 +1564,83 @@ async function loadUsage() {
   } catch (err) {
     usageUpdatedEl.textContent = "Failed to load agent usage.";
   }
+  loadPhoenixUsage();
+}
+
+// Phoenix is optional: the panel stays hidden unless an endpoint is configured, and a
+// configured-but-unreachable Phoenix surfaces the error rather than showing blank cards.
+async function loadPhoenixUsage() {
+  const panel = document.getElementById("phoenix-panel");
+  try {
+    const res = await fetch(`/api/usage/phoenix?window_days=${usageWindow()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.enabled) {
+      panel.classList.add("hidden");
+      return;
+    }
+    panel.classList.remove("hidden");
+    renderPhoenix(data);
+  } catch (err) {
+    panel.classList.add("hidden");
+  }
+}
+
+function renderPhoenix(data) {
+  const statusEl = document.getElementById("phoenix-status");
+  const subEl = document.getElementById("phoenix-sub");
+  const bodyEl = document.getElementById("phoenix-body");
+
+  if (!data.ok) {
+    statusEl.className = "shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700";
+    statusEl.textContent = "unreachable";
+    subEl.textContent = "Configured, but the last query failed.";
+    bodyEl.innerHTML = `<p class="rounded-lg bg-white p-2.5 text-[11px] text-red-600">${escapeHTML(data.error || "Unknown error.")}</p>`;
+    return;
+  }
+
+  statusEl.className = "shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700";
+  statusEl.textContent = "connected";
+  subEl.textContent = `Project "${data.project}" \u00b7 observed from traces, priced by Phoenix`;
+
+  const tokens = data.tokens || {};
+  const cost = data.cost || {};
+  const cards = [
+    ["Traces", data.trace_count ?? "\u2014", "#7C3AED"],
+    ["Observed tokens", tokens.total != null ? formatTokens(tokens.total) : "\u2014", "#7C3AED"],
+    ["Observed cost", cost.total != null ? formatUSD(cost.total) : "\u2014", "#7C3AED"],
+  ];
+  const models = (data.by_model || []).slice(0, 6);
+
+  const cardsHTML = cards
+    .map(
+      ([label, value, color]) => `
+      <div class="rounded-xl border border-violet-200 bg-white p-3">
+        <p class="text-lg font-semibold" style="color:${color}">${escapeHTML(String(value))}</p>
+        <p class="mt-0.5 text-[10px] font-medium text-slate-400">${escapeHTML(label)}</p>
+      </div>`
+    )
+    .join("");
+
+  const modelsHTML = models.length
+    ? `<div class="mt-3 divide-y divide-violet-100 rounded-xl border border-violet-200 bg-white">${models
+        .map(
+          (m) => `
+        <div class="flex items-center gap-2.5 px-3 py-2">
+          <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-600">${escapeHTML(shortModelName(m.model))}</span>
+          <span class="shrink-0 text-[10px] text-slate-400">${m.calls} calls</span>
+          <span class="shrink-0 text-xs font-semibold text-slate-600">${formatTokens(m.total_tokens)}</span>
+        </div>`
+        )
+        .join("")}</div>
+       <p class="mt-1.5 text-[10px] text-slate-400">Per-model rows are sampled from the ${data.span_sample} most recent spans; the totals above cover the whole window.</p>`
+    : "";
+
+  const warnHTML = (data.degraded || []).length
+    ? `<p class="mt-2 rounded-lg bg-amber-50 p-2 text-[10px] text-amber-700">${escapeHTML(data.degraded.join(" \u00b7 "))}</p>`
+    : "";
+
+  bodyEl.innerHTML = `<div class="grid grid-cols-3 gap-3">${cardsHTML}</div>${modelsHTML}${warnHTML}`;
 }
 
 function usageCard(label, value, color, item) {
@@ -2530,6 +2773,36 @@ document.getElementById("github-test-run").addEventListener("click", async () =>
     }
   } catch (err) {
     renderIntegrationResult(githubTestResultEl, false, `Request failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Run check";
+  }
+});
+
+const phoenixTestResultEl = document.getElementById("phoenix-test-result");
+document.getElementById("phoenix-test-run").addEventListener("click", async () => {
+  const btn = document.getElementById("phoenix-test-run");
+  btn.disabled = true;
+  btn.textContent = "Checking…";
+  try {
+    const res = await fetch("/api/settings/test/phoenix", { method: "POST" });
+    const data = await res.json();
+    if (!data.ok) {
+      renderIntegrationResult(phoenixTestResultEl, false, escapeHTML(data.error || "Phoenix test failed."));
+    } else {
+      let html = `<p class="font-semibold">✓ Connected to ${escapeHTML(data.endpoint)}${data.authenticated ? " (authenticated)" : " (no API key)"}</p>`;
+      html += `<p class="mt-1 text-[11px]">${data.project_count} project(s). Configured project "${escapeHTML(data.configured_project)}" ${data.configured_project_found ? "found ✓" : "not found ✗ — traces will not be read until it exists."}</p>`;
+      if (!data.tracing_installed) {
+        html += `<p class="mt-1 text-[11px]">Trace export not installed — run <code class="font-mono">uv sync --extra phoenix</code> to send vulngent's own spans.</p>`;
+      } else if (!data.tracing_enabled) {
+        html += `<p class="mt-1 text-[11px]">Trace export installed but disabled — enable "Send traces to Phoenix" above, then restart.</p>`;
+      } else {
+        html += `<p class="mt-1 text-[11px]">Trace export installed and enabled ✓</p>`;
+      }
+      renderIntegrationResult(phoenixTestResultEl, data.configured_project_found, html);
+    }
+  } catch (err) {
+    renderIntegrationResult(phoenixTestResultEl, false, `Request failed: ${err.message}`);
   } finally {
     btn.disabled = false;
     btn.textContent = "Run check";

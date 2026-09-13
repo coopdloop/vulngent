@@ -264,8 +264,10 @@ def run_cycle(model: str = typer.Option(None, help="Override the OpenRouter mode
     from autogen_agentchat.ui import Console as AgentConsole
 
     from vulngent.agents.team import build_team
+    from vulngent.tracing import setup_tracing
 
     init_db()
+    setup_tracing()  # no-op unless PHOENIX_TRACING_ENABLED
 
     async def _run() -> None:
         team = build_team(model=model)

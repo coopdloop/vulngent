@@ -83,6 +83,20 @@ class Settings(BaseSettings):
     # Analyst minutes assumed per answered question (research + writing the answer).
     agent_minutes_per_answer: float = 4.0
 
+    # --- Arize Phoenix (LLM observability) ---
+    # Base URL of a Phoenix deployment, e.g. http://localhost:6006. Blank disables it.
+    phoenix_endpoint: str = ""
+    # Bearer token; omit for self-hosted Phoenix with auth disabled.
+    phoenix_api_key: str = ""
+    # Phoenix project that vulngent traces land in.
+    phoenix_project_name: str = "vulngent"
+    # Send OpenTelemetry traces to Phoenix (needs the arize-phoenix-otel extra).
+    phoenix_tracing_enabled: bool = False
+
+    @property
+    def phoenix_enabled(self) -> bool:
+        return bool(self.phoenix_endpoint)
+
 
 @lru_cache
 def get_settings() -> Settings:

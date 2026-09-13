@@ -187,3 +187,44 @@ def test_usage_endpoint_reflects_persisted_turns(chat_db):
 
         bad = client.get("/api/reports/usage?format=xls")
         assert bad.status_code == 400
+
+
+def test_ops_endpoint_returns_operations_snapshot(chat_db):
+    from fastapi.testclient import TestClient
+
+    with TestClient(server.app) as client:
+        payload = client.get("/api/ops?window_days=90").json()
+
+    assert payload["counts"]["backlog_open"] == 1  # the seeded CVE-2099-0001
+    assert payload["mttr_days"] is None  # nothing remediated
+    assert payload["sla"]["compliance"] is None
+    assert "aging" in payload and "owners" in payload
+
+
+def test_phoenix_endpoint_reports_disabled_without_config(chat_db, monkeypatch):
+    from fastapi.testclient import TestClient
+    from vulngent.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "phoenix_endpoint", "", raising=False)
+
+    with TestClient(server.app) as client:
+        payload = client.get("/api/usage/phoenix").json()
+
+    # Optional integrations must not error the dashboard when unconfigured.
+    assert payload == {"enabled": False, "ok": False, "error": "Phoenix is not configured."}
+
+
+def test_phoenix_endpoint_surfaces_connection_errors(chat_db, monkeypatch):
+    from fastapi.testclient import TestClient
+    from vulngent.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "phoenix_endpoint", "http://127.0.0.1:9", raising=False)
+    monkeypatch.setattr(settings, "phoenix_api_key", "", raising=False)
+
+    with TestClient(server.app) as client:
+        payload = client.get("/api/usage/phoenix").json()
+
+    assert payload["enabled"] is True
+    assert payload["ok"] is False
+    assert "Phoenix" in payload["error"]

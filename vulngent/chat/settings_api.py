@@ -127,6 +127,20 @@ SETTINGS_GROUPS: list[dict[str, Any]] = [
             {"key": "AGENT_MINUTES_PER_ANSWER", "label": "Minutes per answered question", "type": "number", "hint": "Analyst time to research + write an answer"},
         ],
     },
+    {
+        "id": "phoenix",
+        "title": "Arize Phoenix (LLM observability)",
+        "description": (
+            "Read true observed token usage and cost from Phoenix traces, instead of only the "
+            "turns the chat UI recorded. Leave the endpoint blank to disable."
+        ),
+        "fields": [
+            {"key": "PHOENIX_ENDPOINT", "label": "Endpoint", "hint": "e.g. http://localhost:6006"},
+            {"key": "PHOENIX_API_KEY", "label": "API key", "secret": True, "hint": "Bearer token; blank if auth is disabled"},
+            {"key": "PHOENIX_PROJECT_NAME", "label": "Project name", "hint": "Phoenix project vulngent traces land in"},
+            {"key": "PHOENIX_TRACING_ENABLED", "label": "Send traces to Phoenix", "type": "bool", "hint": "Needs `uv sync --extra phoenix`; applies on restart"},
+        ],
+    },
 ]
 
 _FIELD_TO_ATTR = {f["key"]: f["key"].lower() for g in SETTINGS_GROUPS for f in g["fields"]}
@@ -295,4 +309,38 @@ def _run_github_test(body: GitHubTestRequest) -> dict[str, Any]:
         except GithubException as exc:
             result["ok"] = False
             result["error"] = f"Repo check failed: {exc.data.get('message', exc)}"
+    return result
+
+
+@router.post("/test/phoenix")
+async def test_phoenix() -> dict[str, Any]:
+    return await asyncio.to_thread(_run_phoenix_test)
+
+
+def _run_phoenix_test() -> dict[str, Any]:
+    from vulngent.integrations.phoenix_client import (
+        PhoenixClient,
+        PhoenixError,
+        PhoenixNotConfigured,
+    )
+
+    try:
+        client = PhoenixClient()
+    except PhoenixNotConfigured as exc:
+        return {"ok": False, "error": str(exc)}
+    try:
+        result = client.check()
+    except PhoenixError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    settings = get_settings()
+    # Reading traces and writing them are independent; a working read connection with
+    # tracing off is a common half-configured state worth calling out explicitly.
+    result["tracing_enabled"] = settings.phoenix_tracing_enabled
+    try:
+        import phoenix.otel  # noqa: F401
+
+        result["tracing_installed"] = True
+    except ImportError:
+        result["tracing_installed"] = False
     return result

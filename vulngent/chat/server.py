@@ -32,8 +32,10 @@ from vulngent.config import get_settings
 from vulngent.db import repository as repo
 from vulngent.db.models import Asset, ChatMention, ChatMessage, ChatThread, User, Vulnerability, VulnStatus
 from vulngent.db.session import ensure_schema, get_session
+from vulngent.ops_data import collect_ops_data, ops_payload
 from vulngent.report_data import collect_report_data
 from vulngent.reporting import SUPPORTED_FORMATS, render_report, render_usage_report
+from vulngent.tracing import setup_tracing
 from vulngent.usage_data import collect_usage_data, usage_payload
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -51,6 +53,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(settings_router)
 app.include_router(auth_router)
 ensure_schema()
+setup_tracing()  # no-op unless PHOENIX_TRACING_ENABLED
 
 WRITE_TOOL_REGISTRY: dict[str, Callable[..., str]] = {
     "create_github_issue_for_vuln": agent_tools.create_github_issue_for_vuln,
@@ -253,6 +256,63 @@ async def usage(window_days: int = 30) -> dict[str, Any]:
 def _collect_usage(window_days: int) -> dict[str, Any]:
     with get_session() as session:
         return usage_payload(collect_usage_data(session, window_days=window_days or None))
+
+
+@app.get("/api/ops")
+async def ops(window_days: int = 90) -> dict[str, Any]:
+    """Remediation throughput, MTTR, SLA compliance and owner accountability."""
+    return await asyncio.to_thread(_collect_ops, window_days)
+
+
+def _collect_ops(window_days: int) -> dict[str, Any]:
+    with get_session() as session:
+        return ops_payload(collect_ops_data(session, window_days=window_days or None))
+
+
+@app.get("/api/usage/phoenix")
+async def phoenix_usage(window_days: int = 30) -> dict[str, Any]:
+    """True observed usage from Arize Phoenix traces, when configured.
+
+    Always 200 with an {enabled, ok} envelope: Phoenix being down or misconfigured is a
+    normal state for an optional integration and shouldn't error the dashboard."""
+    return await asyncio.to_thread(_collect_phoenix_usage, window_days)
+
+
+def _collect_phoenix_usage(window_days: int) -> dict[str, Any]:
+    from vulngent.integrations.phoenix_client import (
+        PhoenixClient,
+        PhoenixError,
+        PhoenixNotConfigured,
+    )
+
+    try:
+        client = PhoenixClient()
+    except PhoenixNotConfigured:
+        return {"enabled": False, "ok": False, "error": "Phoenix is not configured."}
+    try:
+        usage = client.project_usage(window_days=window_days or None)
+    except PhoenixError as exc:
+        return {"enabled": True, "ok": False, "error": str(exc)}
+    return {
+        "enabled": True,
+        "ok": True,
+        "project": usage.project,
+        "window_days": window_days or None,
+        "trace_count": usage.trace_count,
+        "tokens": {
+            "total": usage.total_tokens,
+            "prompt": usage.prompt_tokens,
+            "completion": usage.completion_tokens,
+        },
+        "cost": {
+            "total": usage.total_cost,
+            "prompt": usage.prompt_cost,
+            "completion": usage.completion_cost,
+        },
+        "by_model": usage.by_model,
+        "span_sample": usage.span_sample,
+        "degraded": usage.degraded,
+    }
 
 
 @app.get("/api/ui/actions")
