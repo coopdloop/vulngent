@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import enum
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, String, Text
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -217,12 +217,14 @@ class Commitment(Base):
 
 
 class User(Base):
-    """An authenticated user (via Sign in with Google)."""
+    """An authenticated user (via Sign in with Google or Microsoft)."""
 
     __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("provider", "subject", name="uq_users_provider_subject"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    google_sub: Mapped[str] = mapped_column(String(255), unique=True, index=True)  # Google's stable subject id
+    provider: Mapped[str] = mapped_column(String(20), default="google", index=True)  # "google" | "microsoft"
+    subject: Mapped[str] = mapped_column(String(255), index=True)  # provider's stable subject id
     email: Mapped[str] = mapped_column(String(320), index=True)
     name: Mapped[str] = mapped_column(String(200), default="")
     picture_url: Mapped[str] = mapped_column(String(1000), default="")

@@ -68,6 +68,7 @@ const VIEWS = {
   dashboard: { title: "Dashboard", subtitle: "Ledger posture at a glance." },
   reports: { title: "Reports", subtitle: "Generate shareable status reports." },
   settings: { title: "Settings", subtitle: "Environment, integrations, and report branding." },
+  profile: { title: "Profile", subtitle: "Your account and session." },
 };
 let currentView = "chat";
 
@@ -97,6 +98,7 @@ function setView(view) {
   resetCursor();
   if (view === "dashboard") loadDashboard();
   if (view === "settings") loadSettings();
+  if (view === "profile") renderProfileView();
   repositionAgent();
 }
 
@@ -157,6 +159,7 @@ function connect() {
 // ==== Auth ====
 const loginOverlayEl = document.getElementById("login-overlay");
 const googleBtnEl = document.getElementById("google-signin-btn");
+const microsoftBtnEl = document.getElementById("microsoft-signin-btn");
 const loginErrorEl = document.getElementById("login-error");
 const profileCardEl = document.getElementById("profile-card");
 const profileAvatarEl = document.getElementById("profile-avatar");
@@ -164,7 +167,16 @@ const profileNameEl = document.getElementById("profile-name");
 const profileEmailEl = document.getElementById("profile-email");
 const logoutBtn = document.getElementById("logout-btn");
 
-let googleClientId = "";
+let authConfig = { google: { enabled: false }, microsoft: { enabled: false } };
+let msalInstance = null;
+
+function initialsFrom(user) {
+  const src = (user && (user.name || user.email)) || "";
+  const parts = src.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
 
 async function initAuth() {
   try {
@@ -177,27 +189,20 @@ async function initAuth() {
     currentUser = null;
   }
 
-  if (!authEnabled) {
-    // Auth off: fully open, behave exactly as before.
+  if (!authEnabled || currentUser) {
+    // Auth off, or already signed in: open the app.
     hideLogin();
     renderProfile();
     startApp();
     return;
   }
 
-  if (currentUser) {
-    hideLogin();
-    renderProfile();
-    startApp();
-    return;
-  }
-
-  // Auth on but not signed in: show the Google button, don't open the socket yet.
+  // Auth on but not signed in: fetch provider config, show the login screen,
+  // and DON'T open the socket or start the agent companion yet.
   try {
-    const cfg = await (await fetch("/api/auth/config")).json();
-    googleClientId = cfg.client_id || "";
+    authConfig = await (await fetch("/api/auth/config")).json();
   } catch (err) {
-    googleClientId = "";
+    /* keep defaults */
   }
   showLogin();
   renderProfile();
@@ -206,6 +211,7 @@ async function initAuth() {
 function startApp() {
   if (authReady) return;
   authReady = true;
+  setAgentAnchor("navbar"); // spawn the agent companion only once we're in.
   connect();
   loadSessions();
 }
@@ -214,6 +220,7 @@ function showLogin() {
   loginOverlayEl.classList.remove("hidden");
   loginOverlayEl.classList.add("flex");
   renderGoogleButton();
+  renderMicrosoftButton();
 }
 
 function hideLogin() {
@@ -222,18 +229,14 @@ function hideLogin() {
 }
 
 function renderGoogleButton() {
-  if (!googleClientId) {
-    loginErrorEl.textContent = "Server auth is enabled but no Google client id is configured.";
-    loginErrorEl.classList.remove("hidden");
-    return;
-  }
+  if (!authConfig.google || !authConfig.google.enabled) return;
   // GIS may still be loading; retry until google.accounts is ready.
   if (!(window.google && google.accounts && google.accounts.id)) {
     setTimeout(renderGoogleButton, 150);
     return;
   }
   google.accounts.id.initialize({
-    client_id: googleClientId,
+    client_id: authConfig.google.client_id,
     callback: onGoogleCredential,
   });
   googleBtnEl.innerHTML = "";
@@ -243,16 +246,64 @@ function renderGoogleButton() {
     shape: "pill",
     text: "signin_with",
     logo_alignment: "left",
+    width: 260,
   });
 }
 
+function renderMicrosoftButton() {
+  if (!authConfig.microsoft || !authConfig.microsoft.enabled) return;
+  microsoftBtnEl.classList.remove("hidden");
+}
+
 async function onGoogleCredential(response) {
+  await submitLogin("/api/auth/google", { credential: response.credential });
+}
+
+async function ensureMsal() {
+  if (msalInstance) return msalInstance;
+  // MSAL browser lib may still be loading.
+  let tries = 0;
+  while (!(window.msal && msal.PublicClientApplication) && tries < 40) {
+    await new Promise((r) => setTimeout(r, 150));
+    tries += 1;
+  }
+  if (!(window.msal && msal.PublicClientApplication)) {
+    throw new Error("Microsoft sign-in library failed to load.");
+  }
+  const tenant = authConfig.microsoft.tenant || "common";
+  msalInstance = new msal.PublicClientApplication({
+    auth: {
+      clientId: authConfig.microsoft.client_id,
+      authority: `https://login.microsoftonline.com/${tenant}`,
+      redirectUri: window.location.origin,
+    },
+    cache: { cacheLocation: "sessionStorage" },
+  });
+  await msalInstance.initialize();
+  return msalInstance;
+}
+
+async function onMicrosoftClick() {
   loginErrorEl.classList.add("hidden");
   try {
-    const res = await fetch("/api/auth/google", {
+    const pca = await ensureMsal();
+    const result = await pca.loginPopup({ scopes: ["openid", "profile", "email"] });
+    const idToken = result && result.idToken;
+    if (!idToken) throw new Error("No id token returned by Microsoft.");
+    await submitLogin("/api/auth/microsoft", { id_token: idToken });
+  } catch (err) {
+    loginErrorEl.textContent = (err && err.message) || "Microsoft sign-in failed.";
+    loginErrorEl.classList.remove("hidden");
+  }
+}
+
+async function submitLogin(url, body) {
+  loginErrorEl.classList.add("hidden");
+  try {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ credential: response.credential }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -279,16 +330,87 @@ function renderProfile() {
   profileCardEl.classList.add("flex");
   profileNameEl.textContent = currentUser.name || currentUser.email || "Signed in";
   profileEmailEl.textContent = currentUser.email || "";
-  if (currentUser.picture) {
-    profileAvatarEl.src = currentUser.picture;
-    profileAvatarEl.classList.remove("hidden");
-  } else {
-    profileAvatarEl.removeAttribute("src");
+  paintAvatar(profileAvatarEl, currentUser, "text-[11px]");
+  if (currentView === "profile") renderProfileView();
+}
+
+// Paint an avatar element: use the picture if present+loadable, else initials.
+// `el` is a <span> container we fill with either an <img> or initials text.
+function paintAvatar(el, user, textClass = "text-xs") {
+  if (!el) return;
+  const initials = initialsFrom(user);
+  el.textContent = initials;
+  el.classList.add("avatar-initials");
+  if (user && user.picture) {
+    const img = new Image();
+    img.referrerPolicy = "no-referrer";
+    img.onload = () => {
+      el.textContent = "";
+      el.classList.remove("avatar-initials");
+      img.className = "h-full w-full rounded-[inherit] object-cover";
+      el.appendChild(img);
+    };
+    img.onerror = () => {
+      /* keep initials */
+    };
+    img.src = user.picture;
   }
 }
 
+function renderProfileView() {
+  const el = document.getElementById("view-profile-body");
+  if (!el) return;
+  if (!authEnabled) {
+    el.innerHTML = `<div class="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500">
+      Authentication is disabled on this server. Set a Google or Microsoft client id to enable user accounts.
+    </div>`;
+    return;
+  }
+  if (!currentUser) {
+    el.innerHTML = `<div class="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500">You are not signed in.</div>`;
+    return;
+  }
+  const providerLabel = currentUser.provider === "microsoft" ? "Microsoft" : "Google";
+  el.innerHTML = `
+    <div class="rounded-2xl border border-slate-200 bg-white p-6">
+      <div class="flex items-center gap-4">
+        <span id="profile-view-avatar" class="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-slate-900 text-xl font-semibold text-white"></span>
+        <div class="min-w-0">
+          <p class="truncate text-lg font-semibold text-slate-800">${escapeHTML(currentUser.name || "—")}</p>
+          <p class="truncate text-sm text-slate-400">${escapeHTML(currentUser.email || "")}</p>
+          <span class="mt-1 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">Signed in with ${providerLabel}</span>
+        </div>
+      </div>
+      <dl class="mt-6 grid grid-cols-1 gap-4 border-t border-slate-100 pt-5 sm:grid-cols-2">
+        <div>
+          <dt class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Name</dt>
+          <dd class="mt-0.5 text-sm text-slate-700">${escapeHTML(currentUser.name || "—")}</dd>
+        </div>
+        <div>
+          <dt class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Email</dt>
+          <dd class="mt-0.5 text-sm text-slate-700">${escapeHTML(currentUser.email || "—")}</dd>
+        </div>
+        <div>
+          <dt class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Provider</dt>
+          <dd class="mt-0.5 text-sm text-slate-700">${providerLabel}</dd>
+        </div>
+        <div>
+          <dt class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">User ID</dt>
+          <dd class="mt-0.5 font-mono text-sm text-slate-700">#${currentUser.id}</dd>
+        </div>
+      </dl>
+      <div class="mt-6 border-t border-slate-100 pt-5">
+        <button id="profile-logout" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-red-50 hover:text-red-500">Sign out</button>
+      </div>
+    </div>`;
+  paintAvatar(document.getElementById("profile-view-avatar"), currentUser, "text-xl");
+  const btn = document.getElementById("profile-logout");
+  if (btn) btn.addEventListener("click", () => logoutBtn && logoutBtn.click());
+}
+
 if (logoutBtn) {
-  logoutBtn.addEventListener("click", async () => {
+  logoutBtn.addEventListener("click", async (event) => {
+    event.stopPropagation();
     try {
       await fetch("/api/auth/logout", { method: "POST" });
     } catch (err) {
@@ -299,6 +421,10 @@ if (logoutBtn) {
     }
     window.location.reload();
   });
+}
+if (microsoftBtnEl) microsoftBtnEl.addEventListener("click", onMicrosoftClick);
+if (profileCardEl) {
+  profileCardEl.addEventListener("click", () => setView("profile"));
 }
 
 initAuth();
@@ -631,21 +757,15 @@ function shortModelName(model) {
   return model.split("/").pop();
 }
 
-function userAvatar() {
-  const pic = currentUser && currentUser.picture;
-  if (pic) {
-    return `<img src="${escapeHTML(pic)}" alt="" referrerpolicy="no-referrer" class="h-7 w-7 shrink-0 rounded-lg object-cover" />`;
-  }
-  const initials = userInitials();
-  return `<span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-[11px] font-semibold text-white">${escapeHTML(initials)}</span>`;
-}
-
-function userInitials() {
-  const src = (currentUser && (currentUser.name || currentUser.email)) || "";
-  const parts = src.trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) return "You";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+// Build a user avatar element (initials by default, replaced by photo if it loads).
+// Returns null when auth is off / no user, so unauthenticated chat looks unchanged.
+function buildUserAvatar() {
+  if (!currentUser) return null;
+  const span = document.createElement("span");
+  span.className =
+    "flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-900 text-[11px] font-semibold text-white";
+  paintAvatar(span, currentUser, "text-[11px]");
+  return span;
 }
 
 function appendUserMessage(text) {
@@ -657,7 +777,8 @@ function appendUserMessage(text) {
     "bubble-user max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-tr-sm bg-slate-900 px-3.5 py-2.5 text-sm leading-relaxed text-slate-50 shadow-sm";
   bubble.textContent = text;
   wrapper.appendChild(bubble);
-  wrapper.insertAdjacentHTML("beforeend", userAvatar());
+  const avatar = buildUserAvatar();
+  if (avatar) wrapper.appendChild(avatar);
   historyEl.appendChild(wrapper);
   scrollToBottom();
 }
@@ -1529,8 +1650,10 @@ historyEl.addEventListener("scroll", () => {
   }
 });
 
-// The agent chip lives in the navbar until work pulls it elsewhere.
-setAgentAnchor("navbar");
+// The agent chip lives in the navbar until work pulls it elsewhere. It is only
+// spawned once the app actually starts (startApp) so it never shows behind the
+// login overlay; when auth is off, startApp runs immediately on load.
+if (authReady) setAgentAnchor("navbar");
 
 function cursorLoop() {
   if (agentAnchor) {

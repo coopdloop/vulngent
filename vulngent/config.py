@@ -18,9 +18,13 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "anthropic/claude-sonnet-4.5"
 
-    # --- Auth (Google OAuth / Sign in with Google) ---
-    # If google_client_id is empty, auth is bypassed entirely (local-dev friendly).
+    # --- Auth (Sign in with Google / Microsoft) ---
+    # If no provider client id is set, auth is bypassed entirely (local-dev friendly).
     google_client_id: str = ""
+    # Microsoft (Azure AD / Entra ID) app registration client id.
+    microsoft_client_id: str = ""
+    # Microsoft tenant: "common" (any account), "organizations", "consumers", or a tenant id.
+    microsoft_tenant: str = "common"
     # Optional Workspace lock-down: only accept accounts on this domain (e.g. "example.com").
     google_allowed_domain: str = ""
     # Secret used to sign the session cookie. Auto-generated per-process if unset;
@@ -28,8 +32,16 @@ class Settings(BaseSettings):
     session_secret: str = ""
 
     @property
-    def auth_enabled(self) -> bool:
+    def google_enabled(self) -> bool:
         return bool(self.google_client_id)
+
+    @property
+    def microsoft_enabled(self) -> bool:
+        return bool(self.microsoft_client_id)
+
+    @property
+    def auth_enabled(self) -> bool:
+        return self.google_enabled or self.microsoft_enabled
 
     # --- GitHub ---
     github_token: str = ""

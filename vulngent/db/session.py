@@ -41,6 +41,22 @@ def ensure_schema() -> None:
         if rows and "owner_id" not in cols:
             conn.exec_driver_sql("ALTER TABLE chat_threads ADD COLUMN owner_id INTEGER")
 
+        # users: migrate the original single-provider schema (google_sub) to the
+        # provider + subject shape without dropping existing rows.
+        urows = conn.exec_driver_sql("PRAGMA table_info(users)").all()
+        ucols = {r[1] for r in urows}
+        if urows and "provider" not in ucols:
+            conn.exec_driver_sql("ALTER TABLE users ADD COLUMN provider VARCHAR(20) DEFAULT 'google'")
+        if urows and "subject" not in ucols:
+            conn.exec_driver_sql("ALTER TABLE users ADD COLUMN subject VARCHAR(255)")
+            if "google_sub" in ucols:
+                conn.exec_driver_sql("UPDATE users SET subject = google_sub WHERE subject IS NULL")
+        # Drop the legacy NOT NULL google_sub column so provider-agnostic inserts work.
+        if "google_sub" in ucols:
+            conn.exec_driver_sql("UPDATE users SET subject = google_sub WHERE subject IS NULL")
+            conn.exec_driver_sql("DROP INDEX IF EXISTS ix_users_google_sub")
+            conn.exec_driver_sql("ALTER TABLE users DROP COLUMN google_sub")
+
 
 @contextmanager
 def get_session() -> Iterator[Session]:

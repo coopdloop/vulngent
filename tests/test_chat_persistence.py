@@ -25,6 +25,14 @@ def chat_db(monkeypatch):
             yield s
 
     monkeypatch.setattr(server, "get_session", fake_get_session)
+    # Force auth off so the HTTP endpoints under test don't require a signed-in
+    # user (a real GOOGLE_CLIENT_ID in .env would otherwise enable it).
+    import vulngent.chat.auth as auth_mod
+    from vulngent.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(type(settings), "auth_enabled", property(lambda self: False))
+    monkeypatch.setattr(auth_mod, "get_session", fake_get_session)
     with factory() as s:
         s.add(
             Vulnerability(

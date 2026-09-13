@@ -67,13 +67,15 @@ uv run vulngent run-cycle
 triage agent may pause and ask you (the analyst) a direct question when it needs help
 confirming reachability — answer at the `your answer>` prompt.
 
-## Authentication (Sign in with Google)
+## Authentication (Sign in with Google / Microsoft)
 
-Auth is **optional and off by default** — with no `GOOGLE_CLIENT_ID` set, the chat UI
-stays fully open (local-dev friendly). Set a client id and the app requires Google
-sign-in: a login screen gates the UI, a profile card appears bottom-left in the sidebar,
-and user avatars show on chat messages. Chat threads become per-user (legacy threads with
-no owner stay visible to everyone).
+Auth is **optional and off by default** — with no provider client id set, the chat UI
+stays fully open (local-dev friendly). Set a Google and/or Microsoft client id and the
+app requires sign-in: a login screen gates the UI, a clickable profile card appears
+bottom-left in the sidebar (opens a **Profile** page), and user avatars show on chat
+messages. Chat threads become per-user (legacy threads with no owner stay visible to
+everyone). Both providers can be enabled at once; the login screen shows a button for
+each configured provider.
 
 ### Create the Google OAuth client ID
 
@@ -114,7 +116,7 @@ uv run vulngent migrate
 uv run vulngent chat
 ```
 
-**Summary of what to enter in the Cloud Console:**
+**Summary of what to enter in the Google Cloud Console:**
 
 | Field | Value |
 | --- | --- |
@@ -122,6 +124,42 @@ uv run vulngent chat
 | Authorized JavaScript origins | `http://localhost:7860`, `http://127.0.0.1:7860`, prod origin |
 | Authorized redirect URIs | (none needed) |
 | Scopes | `openid`, `email`, `profile` (defaults) |
+
+### Create the Microsoft (Azure / Entra ID) app registration
+
+In the [Azure Portal](https://portal.azure.com) → **Microsoft Entra ID → App registrations → New registration**:
+
+1. **Name:** anything, e.g. `vulngent web`.
+2. **Supported account types:** pick what matches your `MICROSOFT_TENANT`:
+   - *Accounts in any organizational directory and personal Microsoft accounts* → `common`
+   - *Accounts in any organizational directory* → `organizations`
+   - *Personal Microsoft accounts only* → `consumers`
+   - *This organizational directory only* → your specific tenant id
+3. **Redirect URI:** platform **Single-page application (SPA)**, value = your app origin
+   (`http://localhost:7860`, and your prod origin). MSAL.js uses the SPA/PKCE flow, so
+   register it as SPA — not Web — and **no client secret is needed**.
+4. After creating, copy the **Application (client) ID** from the Overview page.
+5. Under **Token configuration**, the default `openid`/`profile`/`email` scopes are enough;
+   the returned ID token's `email`/`preferred_username` and `name` claims are used.
+
+| Field | Value |
+| --- | --- |
+| Platform | Single-page application (SPA) |
+| Redirect URIs | `http://localhost:7860`, `http://127.0.0.1:7860`, prod origin |
+| Client secret | (none needed) |
+| Supported account types | must match `MICROSOFT_TENANT` |
+
+Then set in `.env` (or in-app Settings):
+
+```bash
+MICROSOFT_CLIENT_ID=00000000-0000-0000-0000-000000000000
+MICROSOFT_TENANT=common   # or organizations / consumers / a tenant id
+```
+
+> **Note on profile photos:** Google only returns a `picture` for some accounts and
+> Microsoft ID tokens never include one, so the UI falls back to the user's initials
+> when no photo is available (this is why an empty `picture` still renders a clean
+> avatar rather than a broken image).
 
 ## Bringing in your own vuln data
 

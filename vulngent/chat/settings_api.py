@@ -51,11 +51,13 @@ SETTINGS_GROUPS: list[dict[str, Any]] = [
     },
     {
         "id": "auth",
-        "title": "Authentication (Google)",
-        "description": "Sign in with Google. Leave the client id blank to disable auth (open local dev).",
+        "title": "Authentication (Google / Microsoft)",
+        "description": "Sign in with Google and/or Microsoft. Leave both client ids blank to disable auth (open local dev).",
         "fields": [
-            {"key": "GOOGLE_CLIENT_ID", "label": "OAuth client ID", "hint": "…apps.googleusercontent.com (from Google Cloud Console)"},
-            {"key": "GOOGLE_ALLOWED_DOMAIN", "label": "Allowed domain", "hint": "Optional: restrict to one Workspace domain, e.g. example.com"},
+            {"key": "GOOGLE_CLIENT_ID", "label": "Google client ID", "hint": "…apps.googleusercontent.com (Google Cloud Console)"},
+            {"key": "GOOGLE_ALLOWED_DOMAIN", "label": "Google allowed domain", "hint": "Optional: restrict to one Workspace domain, e.g. example.com"},
+            {"key": "MICROSOFT_CLIENT_ID", "label": "Microsoft client ID", "hint": "Azure app registration (Application/client ID)"},
+            {"key": "MICROSOFT_TENANT", "label": "Microsoft tenant", "hint": "common, organizations, consumers, or a tenant id"},
             {"key": "SESSION_SECRET", "label": "Session secret", "secret": True, "hint": "Stable random string so logins survive restarts"},
         ],
     },
