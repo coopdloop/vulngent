@@ -53,6 +53,11 @@ uv run vulngent initdb
 
 ## Usage
 
+For day-to-day dev just run `make dev` — it starts a local Phoenix in the background
+and the chat UI in the foreground with tracing enabled, so the usage dashboard runs in
+observed mode out of the box. `make help` lists the other targets
+(`dev-nophoenix`, `phoenix`, `app`, `setup`, `test`).
+
 ```bash
 # Import vulnerabilities from a normalized JSON/CSV export (see sample_data/ for shape)
 uv run vulngent import sample_data/sample_vulns.json
@@ -134,10 +139,11 @@ uv sync --extra phoenix
 ```
 
 then set `PHOENIX_TRACING_ENABLED=true` and restart. Without the extra, tracing logs a
-warning and stays off — it never breaks the app. Spin up a local Phoenix with:
+warning and stays off — it never breaks the app. `make dev` handles all of this — it
+backgrounds Phoenix and runs the app with tracing on. To run Phoenix manually:
 
 ```bash
-uvx --with arize-phoenix phoenix serve   # http://localhost:6006
+make phoenix   # or: uv run --with arize-phoenix phoenix serve  (http://localhost:6006)
 ```
 
 Phoenix exposes project-level cost/token rollups over GraphQL only (not REST — see
