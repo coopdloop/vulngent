@@ -1539,7 +1539,13 @@ function renderOps(data) {
 }
 
 // ==== Agent usage, cost & value ====
+// Source model: Phoenix (observed traces) is the source of truth for usage because it
+// sees every LLM call from every entry point (web, CLI, run-cycle). The local SQLite
+// metering only captures web-chat turns, so it is a *partial* fallback — clearly labeled
+// — used only when Phoenix is unconfigured or unreachable.
 const usageUpdatedEl = document.getElementById("usage-updated");
+const usageScopeEl = document.getElementById("usage-scope");
+const usageFallbackEl = document.getElementById("usage-fallback");
 const usageWindowEl = document.getElementById("usage-window");
 usageWindowEl.addEventListener("change", () => loadUsage());
 document.getElementById("usage-report-btn").addEventListener("click", () => generateUsageReport("pdf", usageWindow()));
@@ -1555,106 +1561,88 @@ function formatUSD(value) {
   return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function setUsageScope(kind) {
+  // kind: "observed" | "partial" | null
+  usageScopeEl.classList.remove("hidden", "bg-violet-100", "text-violet-700", "bg-amber-100", "text-amber-700");
+  if (kind === "observed") {
+    usageScopeEl.textContent = "observed · all sources";
+    usageScopeEl.classList.add("bg-violet-100", "text-violet-700");
+  } else if (kind === "partial") {
+    usageScopeEl.textContent = "partial · web chat only";
+    usageScopeEl.classList.add("bg-amber-100", "text-amber-700");
+  } else {
+    usageScopeEl.classList.add("hidden");
+  }
+}
+
 async function loadUsage() {
   usageUpdatedEl.textContent = "Loading…";
+  const win = usageWindow();
+
+  // Ask Phoenix first: it is the complete, observed source of usage.
+  let phoenix = null;
   try {
-    const res = await fetch(`/api/usage?window_days=${usageWindow()}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    renderUsage(await res.json());
+    const res = await fetch(`/api/usage/phoenix?window_days=${win}`);
+    if (res.ok) phoenix = await res.json();
   } catch (err) {
+    phoenix = null;
+  }
+
+  // Local ledger numbers (web-chat + ledger activity) are always available.
+  let local = null;
+  try {
+    const res = await fetch(`/api/usage?window_days=${win}`);
+    if (res.ok) local = await res.json();
+  } catch (err) {
+    local = null;
+  }
+
+  if (phoenix && phoenix.enabled && phoenix.ok) {
+    setUsageScope("observed");
+    usageFallbackEl.classList.add("hidden");
+    renderUsageFromPhoenix(phoenix, local);
+  } else if (local) {
+    setUsageScope("partial");
+    renderUsageFromLocal(local, phoenix);
+  } else {
+    setUsageScope(null);
     usageUpdatedEl.textContent = "Failed to load agent usage.";
   }
-  loadPhoenixUsage();
 }
 
-// Phoenix is optional: the panel stays hidden unless an endpoint is configured, and a
-// configured-but-unreachable Phoenix surfaces the error rather than showing blank cards.
-async function loadPhoenixUsage() {
-  const panel = document.getElementById("phoenix-panel");
-  try {
-    const res = await fetch(`/api/usage/phoenix?window_days=${usageWindow()}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (!data.enabled) {
-      panel.classList.add("hidden");
-      return;
-    }
-    panel.classList.remove("hidden");
-    renderPhoenix(data);
-  } catch (err) {
-    panel.classList.add("hidden");
-  }
-}
+// Top-line cards come from Phoenix's observed totals; per-model rows too. Sections that
+// Phoenix knows nothing about (turns, tool calls, ledger outcomes, spend trend) fall back
+// to the local ledger and are labeled as such below.
+function renderUsageFromPhoenix(phoenix, local) {
+  const tokens = phoenix.tokens || {};
+  const cost = phoenix.cost || {};
+  usageUpdatedEl.textContent = `${local?.window_label || ""} · updated ${feedbackTimestamp(local?.generated_at) || "just now"}`;
 
-function renderPhoenix(data) {
-  const statusEl = document.getElementById("phoenix-status");
-  const subEl = document.getElementById("phoenix-sub");
-  const bodyEl = document.getElementById("phoenix-body");
-
-  if (!data.ok) {
-    statusEl.className = "shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700";
-    statusEl.textContent = "unreachable";
-    subEl.textContent = "Configured, but the last query failed.";
-    bodyEl.innerHTML = `<p class="rounded-lg bg-white p-2.5 text-[11px] text-red-600">${escapeHTML(data.error || "Unknown error.")}</p>`;
-    return;
-  }
-
-  statusEl.className = "shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700";
-  statusEl.textContent = "connected";
-  subEl.textContent = `Project "${data.project}" \u00b7 observed from traces, priced by Phoenix`;
-
-  const tokens = data.tokens || {};
-  const cost = data.cost || {};
-  const cards = [
-    ["Traces", data.trace_count ?? "\u2014", "#7C3AED"],
-    ["Observed tokens", tokens.total != null ? formatTokens(tokens.total) : "\u2014", "#7C3AED"],
-    ["Observed cost", cost.total != null ? formatUSD(cost.total) : "\u2014", "#7C3AED"],
-  ];
-  const models = (data.by_model || []).slice(0, 6);
-
-  const cardsHTML = cards
-    .map(
-      ([label, value, color]) => `
-      <div class="rounded-xl border border-violet-200 bg-white p-3">
-        <p class="text-lg font-semibold" style="color:${color}">${escapeHTML(String(value))}</p>
-        <p class="mt-0.5 text-[10px] font-medium text-slate-400">${escapeHTML(label)}</p>
-      </div>`
+  const t = (local && local.totals) || {};
+  document.getElementById("usage-kpis").innerHTML = [
+    ["Traces", phoenix.trace_count ?? "—", "#7C3AED"],
+    ["Tokens", tokens.total != null ? formatTokens(tokens.total) : "—", "#7C3AED"],
+    ["Tool calls", local ? `${t.tool_calls ?? 0}${t.tool_errors ? ` / ${t.tool_errors} err` : ""}` : "—", t.tool_errors ? "#B91C1C" : "#0F172A"],
+    ["Spend", cost.total != null ? formatUSD(cost.total) : "—", "#7C3AED"],
+    ["Sessions", t.sessions ?? "—", "#0F172A"],
+  ]
+    .map(([label, value, color]) =>
+      usageCard(label, value, color, { kind: "kpi", title: `agent ${label.toLowerCase()}`, value: String(value) })
     )
     .join("");
 
-  const modelsHTML = models.length
-    ? `<div class="mt-3 divide-y divide-violet-100 rounded-xl border border-violet-200 bg-white">${models
-        .map(
-          (m) => `
-        <div class="flex items-center gap-2.5 px-3 py-2">
-          <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-600">${escapeHTML(shortModelName(m.model))}</span>
-          <span class="shrink-0 text-[10px] text-slate-400">${m.calls} calls</span>
-          <span class="shrink-0 text-xs font-semibold text-slate-600">${formatTokens(m.total_tokens)}</span>
-        </div>`
-        )
-        .join("")}</div>
-       <p class="mt-1.5 text-[10px] text-slate-400">Per-model rows are sampled from the ${data.span_sample} most recent spans; the totals above cover the whole window.</p>`
-    : "";
-
-  const warnHTML = (data.degraded || []).length
-    ? `<p class="mt-2 rounded-lg bg-amber-50 p-2 text-[10px] text-amber-700">${escapeHTML(data.degraded.join(" \u00b7 "))}</p>`
-    : "";
-
-  bodyEl.innerHTML = `<div class="grid grid-cols-3 gap-3">${cardsHTML}</div>${modelsHTML}${warnHTML}`;
+  renderUsageValue(local);
+  renderUsageModels(phoenix.by_model || [], "phoenix");
+  renderUsageActivity(local);
+  renderFallbackPanel(phoenix, local, false);
 }
 
-function usageCard(label, value, color, item) {
-  return `
-    <div class="dash-item rounded-2xl border border-slate-200 bg-white p-3.5" data-item='${escapeHTML(JSON.stringify(item))}'>
-      <p class="text-xl font-semibold" style="color:${color}">${escapeHTML(String(value))}</p>
-      <p class="mt-0.5 text-[11px] font-medium text-slate-400">${escapeHTML(label)}</p>
-    </div>`;
-}
-
-function renderUsage(data) {
-  const t = data.totals || {};
-  const v = data.value || {};
-  usageUpdatedEl.textContent = `${data.window_label || ""} · updated ${feedbackTimestamp(data.generated_at) || "just now"}`;
+// Phoenix is offline/unconfigured: the only usage data is the local web-chat metering,
+// which misses CLI/run-cycle. Show it, but banner it as partial so it is never read as
+// the complete product usage.
+function renderUsageFromLocal(local, phoenix) {
+  const t = local.totals || {};
+  usageUpdatedEl.textContent = `${local.window_label || ""} · updated ${feedbackTimestamp(local.generated_at) || "just now"}`;
 
   document.getElementById("usage-kpis").innerHTML = [
     ["Agent turns", t.turns ?? 0, "#0F172A"],
@@ -1668,6 +1656,16 @@ function renderUsage(data) {
     )
     .join("");
 
+  renderUsageValue(local);
+  renderUsageModels(local.by_model || [], "local");
+  renderUsageActivity(local);
+  renderFallbackPanel(phoenix, local, true);
+}
+
+// Value/ROI is always a modelled estimate (Phoenix has no notion of analyst time), so it
+// is computed from the local ledger either way. Rendered identically in both modes.
+function renderUsageValue(local) {
+  const v = (local && local.value) || {};
   document.getElementById("usage-value").innerHTML = [
     ["Agent cost", formatUSD(v.agent_cost_usd), "#0F172A"],
     ["Analyst time saved", `${(v.analyst_hours_saved ?? 0).toFixed(1)}h`, "#4F46E5"],
@@ -1680,14 +1678,40 @@ function renderUsage(data) {
     )
     .join("");
 
-  const p = data.pricing || {};
+  const p = (local && local.pricing) || {};
   document.getElementById("usage-assumptions").textContent =
-    `Assumptions: $${p.input_per_mtok}/M input tokens, $${p.output_per_mtok}/M output tokens, ` +
+    `Estimated — not observed. Assumptions: $${p.input_per_mtok}/M input tokens, $${p.output_per_mtok}/M output tokens, ` +
     `$${p.analyst_hourly_rate}/hr analyst, ${p.minutes_per_action} min saved per automated action ` +
     `(${v.actions_automated ?? 0} in window), ${p.minutes_per_answer} min per answered question ` +
     `(${v.questions_answered ?? 0}). Tune these in Settings → Agent economics.`;
+}
 
-  const daily = data.daily || [];
+function renderUsageModels(models, source) {
+  const isPhoenix = source === "phoenix";
+  document.getElementById("usage-models").innerHTML = models.length
+    ? models
+        .map((m) => {
+          const sub = isPhoenix
+            ? `${m.calls} calls · ${formatTokens(m.prompt_tokens)} in / ${formatTokens(m.completion_tokens)} out`
+            : `${m.turns} turns · ${formatTokens(m.input_tokens)} in / ${formatTokens(m.output_tokens)} out`;
+          const right = isPhoenix ? formatTokens(m.total_tokens) : formatUSD(m.cost_usd);
+          return `
+        <div class="dash-item flex items-center gap-2.5 rounded-lg px-2 py-2.5" data-item='${escapeHTML(JSON.stringify({ kind: "kpi", title: `model ${m.model}`, value: sub }))}'>
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-xs font-medium text-slate-700">${escapeHTML(shortModelName(m.model))}</p>
+            <p class="truncate font-mono text-[10px] text-slate-400">${escapeHTML(sub)}</p>
+          </div>
+          <span class="shrink-0 text-xs font-semibold text-slate-600">${escapeHTML(String(right))}</span>
+        </div>`;
+        })
+        .join("")
+    : '<p class="py-3 text-xs text-slate-400">No model usage recorded.</p>';
+}
+
+// Activity sections (spend trend, top tools, ledger outcomes) only exist in the local
+// ledger — Phoenix has no tool-call or ledger concept. Rendered the same in both modes.
+function renderUsageActivity(local) {
+  const daily = (local && local.daily) || [];
   const maxCost = Math.max(...daily.map((d) => d.cost_usd), 0) || 1;
   document.getElementById("usage-trend").innerHTML = daily.length
     ? `<div class="flex h-28 items-end gap-1">${daily
@@ -1701,23 +1725,7 @@ function renderUsage(data) {
        <div class="mt-1.5 flex justify-between text-[10px] text-slate-400"><span>${escapeHTML(daily[0].day)}</span><span>${escapeHTML(daily[daily.length - 1].day)}</span></div>`
     : '<p class="text-xs text-slate-400">No agent activity recorded in this window.</p>';
 
-  const models = data.by_model || [];
-  document.getElementById("usage-models").innerHTML = models.length
-    ? models
-        .map(
-          (m) => `
-        <div class="dash-item flex items-center gap-2.5 rounded-lg px-2 py-2.5" data-item='${escapeHTML(JSON.stringify({ kind: "kpi", title: `model ${m.model}`, value: `${m.turns} turns` }))}'>
-          <div class="min-w-0 flex-1">
-            <p class="truncate text-xs font-medium text-slate-700">${escapeHTML(shortModelName(m.model))}</p>
-            <p class="truncate font-mono text-[10px] text-slate-400">${m.turns} turns · ${formatTokens(m.input_tokens)} in / ${formatTokens(m.output_tokens)} out</p>
-          </div>
-          <span class="shrink-0 text-xs font-semibold text-slate-600">${escapeHTML(formatUSD(m.cost_usd))}</span>
-        </div>`
-        )
-        .join("")
-    : '<p class="py-3 text-xs text-slate-400">No agent turns recorded.</p>';
-
-  const tools = (data.by_tool || []).slice(0, 10);
+  const tools = ((local && local.by_tool) || []).slice(0, 10);
   const maxCalls = Math.max(...tools.map((x) => x.calls), 0) || 1;
   document.getElementById("usage-tools").innerHTML = tools.length
     ? tools
@@ -1736,7 +1744,7 @@ function renderUsage(data) {
         .join("")
     : '<p class="py-3 text-xs text-slate-400">No tool calls recorded.</p>';
 
-  const outcomes = data.ledger_outcomes || {};
+  const outcomes = (local && local.ledger_outcomes) || {};
   document.getElementById("usage-outcomes").innerHTML = Object.entries(outcomes)
     .map(([key, count]) => {
       const label = key.replace(/_/g, " ");
@@ -1747,6 +1755,66 @@ function renderUsage(data) {
         </div>`;
     })
     .join("");
+}
+
+// The bottom panel explains the current mode. In partial mode it is the amber banner
+// making the web-chat-only scope unmissable; in observed mode it shows a small local
+// web-chat comparison so the two sources can be reconciled.
+function renderFallbackPanel(phoenix, local, isPartial) {
+  const panel = document.getElementById("phoenix-panel");
+  const statusEl = document.getElementById("phoenix-status");
+  const subEl = document.getElementById("phoenix-sub");
+  const bodyEl = document.getElementById("phoenix-body");
+
+  if (isPartial) {
+    const reason =
+      phoenix && phoenix.enabled
+        ? `Phoenix is configured but unreachable (${phoenix.error || "connection failed"}).`
+        : "Phoenix is not configured.";
+    usageFallbackEl.classList.remove("hidden");
+    usageFallbackEl.innerHTML =
+      `<strong>Partial data.</strong> These figures cover <strong>web chat only</strong> — ` +
+      `CLI and <code class="font-mono">run-cycle</code> agent usage is not included. ` +
+      `${escapeHTML(reason)} Connect Phoenix for complete, observed usage across every entry point.`;
+    panel.classList.add("hidden");
+    return;
+  }
+
+  // Observed mode: hide the banner, show a compact local-vs-observed reconciliation.
+  usageFallbackEl.classList.add("hidden");
+  panel.classList.remove("hidden");
+  statusEl.className = "shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700";
+  statusEl.textContent = "observed";
+  subEl.textContent = `Project "${phoenix.project}" · web-chat portion recorded locally, for comparison`;
+
+  const lt = (local && local.totals) || {};
+  const localTok = lt.total_tokens ?? 0;
+  const obsTok = (phoenix.tokens || {}).total;
+  const coverage = obsTok ? Math.min(100, Math.round((localTok / obsTok) * 100)) : null;
+  bodyEl.innerHTML = `
+    <div class="grid grid-cols-3 gap-3">
+      <div class="rounded-xl border border-amber-200 bg-white p-3">
+        <p class="text-lg font-semibold text-slate-700">${formatTokens(localTok)}</p>
+        <p class="mt-0.5 text-[10px] font-medium text-slate-400">Web-chat tokens (local)</p>
+      </div>
+      <div class="rounded-xl border border-violet-200 bg-white p-3">
+        <p class="text-lg font-semibold text-violet-700">${obsTok != null ? formatTokens(obsTok) : "—"}</p>
+        <p class="mt-0.5 text-[10px] font-medium text-slate-400">Total tokens (observed)</p>
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-white p-3">
+        <p class="text-lg font-semibold text-slate-700">${coverage != null ? coverage + "%" : "—"}</p>
+        <p class="mt-0.5 text-[10px] font-medium text-slate-400">of usage is web chat</p>
+      </div>
+    </div>
+    <p class="mt-2 text-[10px] text-slate-400">The gap between observed and web-chat tokens is CLI / run-cycle / retry usage that only Phoenix sees.</p>`;
+}
+
+function usageCard(label, value, color, item) {
+  return `
+    <div class="dash-item rounded-2xl border border-slate-200 bg-white p-3.5" data-item='${escapeHTML(JSON.stringify(item))}'>
+      <p class="text-xl font-semibold" style="color:${color}">${escapeHTML(String(value))}</p>
+      <p class="mt-0.5 text-[11px] font-medium text-slate-400">${escapeHTML(label)}</p>
+    </div>`;
 }
 
 // ==== Reports ====

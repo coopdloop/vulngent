@@ -275,8 +275,9 @@
           <!-- ---- Tab: agent usage, cost &amp; value ---- -->
           <div id="dash-panel-usage" class="dash-panel hidden space-y-4">
             <div class="flex flex-wrap items-center justify-between gap-2">
-              <div>
+              <div class="flex items-center gap-2">
                 <p id="usage-updated" class="text-xs text-slate-400">Loading…</p>
+                <span id="usage-scope" class="hidden rounded-full px-2 py-0.5 text-[10px] font-semibold"></span>
               </div>
               <div class="flex items-center gap-2">
                 <select id="usage-window" class="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 outline-none focus:border-indigo-400">
@@ -288,6 +289,7 @@
                 <button id="usage-report-btn" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100">Export PDF</button>
               </div>
             </div>
+            <div id="usage-fallback" class="hidden rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-800"></div>
             <div id="usage-kpis" class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5"></div>
             <div class="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4">
               <h3 class="text-[11px] font-semibold uppercase tracking-wider text-emerald-700">Cost vs value</h3>
@@ -313,11 +315,11 @@
               <div id="usage-outcomes" class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6"></div>
             </div>
 
-            <!-- Phoenix: true observed usage, only rendered when configured -->
-            <div id="phoenix-panel" class="hidden rounded-2xl border border-violet-200 bg-violet-50/30 p-4">
+            <!-- Local fallback detail: web-chat-only, shown only when Phoenix is offline/unconfigured -->
+            <div id="phoenix-panel" class="hidden rounded-2xl border border-amber-200 bg-amber-50/40 p-4">
               <div class="flex items-start justify-between gap-3">
                 <div>
-                  <h3 class="text-[11px] font-semibold uppercase tracking-wider text-violet-700">Arize Phoenix · observed usage</h3>
+                  <h3 class="text-[11px] font-semibold uppercase tracking-wider text-amber-700">Local web-chat detail</h3>
                   <p id="phoenix-sub" class="mt-0.5 text-[11px] text-slate-500"></p>
                 </div>
                 <span id="phoenix-status" class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"></span>

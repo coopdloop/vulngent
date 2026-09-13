@@ -90,18 +90,30 @@ The **Dashboard** page has three tabs, each backed by its own endpoint and data 
 | --- | --- | --- |
 | **Security posture** | What's broken right now — open/overdue counts, severity mix, top priority, commitments due | `/api/dashboard` |
 | **Remediation ops** | Is the program working — MTTR, SLA compliance, intake vs. closure, backlog aging, owner accountability | `/api/ops` (`ops_data.py`) |
-| **Agent usage & cost** | What the agents cost and returned — turns, tokens, tool calls, spend by model, modelled ROI | `/api/usage` (`usage_data.py`) |
+| **Agent usage & cost** | What the agents cost and returned — tokens, tool calls, spend by model, modelled ROI | `/api/usage` + `/api/usage/phoenix` |
+
+The usage tab has two modes. When Phoenix is reachable it is the **source of truth** for
+tokens/spend (it observes every LLM call from every entry point) and the tab is badged
+*observed · all sources*. When Phoenix is unconfigured or down, the tab falls back to
+vulngent's own web-chat metering and is badged *partial · web chat only* with a banner —
+because that local data only covers web chat, never CLI/`run-cycle`.
 
 Tabs load lazily on first open and refresh when you re-enter the view.
 
 ## Observability with Arize Phoenix
 
 vulngent's built-in usage numbers come from token counts the chat server records, priced
-with the static `AGENT_COST_*` rates. That misses anything outside the web UI (CLI runs,
-`run-cycle`, retries) and can't price models it doesn't know. Wiring up
-[Phoenix](https://github.com/Arize-ai/phoenix) gives you **true observed usage**, computed
-from traces with Phoenix's own model pricing table, shown side by side with vulngent's own
-figures on the *Agent usage & cost* tab.
+with the static `AGENT_COST_*` rates. That only ever captures **web-chat** turns — CLI
+runs, `run-cycle`, and retries are invisible to it — and it prices everything with one
+blended rate. Wiring up [Phoenix](https://github.com/Arize-ai/phoenix) makes it the
+**source of truth** for usage: it observes every LLM call from every entry point and
+prices tokens with its own model pricing table. When Phoenix is configured the *Agent
+usage & cost* tab reads from it; the local web-chat figures drop to a clearly-labeled
+partial fallback used only when Phoenix is offline.
+
+The *Cost vs value* panel is always a **modelled estimate** (analyst time displaced × your
+rates), never an observed figure — Phoenix has no notion of analyst time, so this cannot
+be measured from traces. It is labeled as such in the UI.
 
 **Reading usage** needs no extra dependencies (plain REST + GraphQL). Point vulngent at any
 Phoenix deployment — Settings → *Arize Phoenix*, or `.env`:
