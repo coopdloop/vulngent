@@ -205,6 +205,38 @@ def report(
         console.print(rendered, markup=False)
 
 
+@app.command(name="usage-report")
+def usage_report(
+    format: str = typer.Option("md", "--format", "-f", help="Output format: md, txt, pdf, or docx."),
+    output: str = typer.Option(None, "--output", "-o", help="File path to write to (required for pdf/docx)."),
+    window_days: int = typer.Option(30, "--days", help="Lookback window in days; 0 for all time."),
+) -> None:
+    """Print or export the agent usage, cost and value report."""
+    from vulngent.reporting import SUPPORTED_FORMATS, render_usage_report
+    from vulngent.usage_data import collect_usage_data
+
+    fmt = format.lower()
+    if fmt not in SUPPORTED_FORMATS:
+        console.print(f"[red]Invalid format '{format}'. Must be one of {SUPPORTED_FORMATS}[/red]")
+        raise typer.Exit(1)
+    if fmt in ("pdf", "docx") and not output:
+        console.print(f"[red]--output PATH is required for --format {fmt}[/red]")
+        raise typer.Exit(1)
+
+    init_db()
+    with get_session() as session:
+        data = collect_usage_data(session, window_days=window_days or None)
+    rendered = render_usage_report(data, fmt)
+
+    if output:
+        mode = "wb" if isinstance(rendered, bytes) else "w"
+        with open(output, mode) as f:
+            f.write(rendered)
+        console.print(f"[green]Usage report written to {output}[/green]")
+    else:
+        console.print(rendered, markup=False)
+
+
 @app.command()
 def chat(
     host: str = typer.Option("127.0.0.1", "--host", help="Host for the FastAPI chat server."),

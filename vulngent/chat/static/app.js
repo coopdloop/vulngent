@@ -1294,6 +1294,7 @@ async function loadDashboard() {
   } catch (err) {
     dashboardUpdatedEl.textContent = "Failed to load dashboard.";
   }
+  loadUsage();
 }
 
 function renderDashboard(data) {
@@ -1371,6 +1372,140 @@ function renderDashboard(data) {
     : '<p class="py-3 text-xs text-slate-400">No commitments due in the next 7 days.</p>';
 }
 
+// ==== Agent usage, cost & value ====
+const usageUpdatedEl = document.getElementById("usage-updated");
+const usageWindowEl = document.getElementById("usage-window");
+usageWindowEl.addEventListener("change", () => loadUsage());
+document.getElementById("usage-report-btn").addEventListener("click", () => generateUsageReport("pdf", usageWindow()));
+
+function usageWindow() {
+  return Number(usageWindowEl.value || 30);
+}
+
+function formatUSD(value) {
+  const n = Number(value || 0);
+  // Agent spend is routinely sub-cent; $0.00 would read as "free" rather than "tiny".
+  if (n > 0 && n < 0.01) return `$${n.toFixed(4)}`;
+  return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+async function loadUsage() {
+  usageUpdatedEl.textContent = "Loading…";
+  try {
+    const res = await fetch(`/api/usage?window_days=${usageWindow()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    renderUsage(await res.json());
+  } catch (err) {
+    usageUpdatedEl.textContent = "Failed to load agent usage.";
+  }
+}
+
+function usageCard(label, value, color, item) {
+  return `
+    <div class="dash-item rounded-2xl border border-slate-200 bg-white p-3.5" data-item='${escapeHTML(JSON.stringify(item))}'>
+      <p class="text-xl font-semibold" style="color:${color}">${escapeHTML(String(value))}</p>
+      <p class="mt-0.5 text-[11px] font-medium text-slate-400">${escapeHTML(label)}</p>
+    </div>`;
+}
+
+function renderUsage(data) {
+  const t = data.totals || {};
+  const v = data.value || {};
+  usageUpdatedEl.textContent = `${data.window_label || ""} · updated ${feedbackTimestamp(data.generated_at) || "just now"}`;
+
+  document.getElementById("usage-kpis").innerHTML = [
+    ["Agent turns", t.turns ?? 0, "#0F172A"],
+    ["Sessions", t.sessions ?? 0, "#0F172A"],
+    ["Tokens", formatTokens(t.total_tokens ?? 0), "#4F46E5"],
+    ["Tool calls", `${t.tool_calls ?? 0}${t.tool_errors ? ` / ${t.tool_errors} err` : ""}`, t.tool_errors ? "#B91C1C" : "#0F172A"],
+    ["Spend", formatUSD(t.cost_usd), "#EA580C"],
+  ]
+    .map(([label, value, color]) =>
+      usageCard(label, value, color, { kind: "kpi", title: `agent ${label.toLowerCase()}`, value: String(value) })
+    )
+    .join("");
+
+  document.getElementById("usage-value").innerHTML = [
+    ["Agent cost", formatUSD(v.agent_cost_usd), "#0F172A"],
+    ["Analyst time saved", `${(v.analyst_hours_saved ?? 0).toFixed(1)}h`, "#4F46E5"],
+    ["Labor value", formatUSD(v.labor_value_usd), "#059669"],
+    ["Net value", formatUSD(v.net_value_usd), (v.net_value_usd ?? 0) >= 0 ? "#059669" : "#B91C1C"],
+    ["ROI", v.roi_multiple != null ? `${v.roi_multiple}x` : "—", "#0F172A"],
+  ]
+    .map(([label, value, color]) =>
+      usageCard(label, value, color, { kind: "kpi", title: `agent ${label.toLowerCase()}`, value: String(value) })
+    )
+    .join("");
+
+  const p = data.pricing || {};
+  document.getElementById("usage-assumptions").textContent =
+    `Assumptions: $${p.input_per_mtok}/M input tokens, $${p.output_per_mtok}/M output tokens, ` +
+    `$${p.analyst_hourly_rate}/hr analyst, ${p.minutes_per_action} min saved per automated action ` +
+    `(${v.actions_automated ?? 0} in window), ${p.minutes_per_answer} min per answered question ` +
+    `(${v.questions_answered ?? 0}). Tune these in Settings → Agent economics.`;
+
+  const daily = data.daily || [];
+  const maxCost = Math.max(...daily.map((d) => d.cost_usd), 0) || 1;
+  document.getElementById("usage-trend").innerHTML = daily.length
+    ? `<div class="flex h-28 items-end gap-1">${daily
+        .map(
+          (d) => `
+          <div class="group flex h-full flex-1 flex-col justify-end" title="${escapeHTML(d.day)} · ${d.turns} turns · ${formatUSD(d.cost_usd)}">
+            <div class="w-full rounded-t bg-indigo-500/80 transition group-hover:bg-indigo-600" style="height:${Math.max((d.cost_usd / maxCost) * 100, 2)}%"></div>
+          </div>`
+        )
+        .join("")}</div>
+       <div class="mt-1.5 flex justify-between text-[10px] text-slate-400"><span>${escapeHTML(daily[0].day)}</span><span>${escapeHTML(daily[daily.length - 1].day)}</span></div>`
+    : '<p class="text-xs text-slate-400">No agent activity recorded in this window.</p>';
+
+  const models = data.by_model || [];
+  document.getElementById("usage-models").innerHTML = models.length
+    ? models
+        .map(
+          (m) => `
+        <div class="dash-item flex items-center gap-2.5 rounded-lg px-2 py-2.5" data-item='${escapeHTML(JSON.stringify({ kind: "kpi", title: `model ${m.model}`, value: `${m.turns} turns` }))}'>
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-xs font-medium text-slate-700">${escapeHTML(shortModelName(m.model))}</p>
+            <p class="truncate font-mono text-[10px] text-slate-400">${m.turns} turns · ${formatTokens(m.input_tokens)} in / ${formatTokens(m.output_tokens)} out</p>
+          </div>
+          <span class="shrink-0 text-xs font-semibold text-slate-600">${escapeHTML(formatUSD(m.cost_usd))}</span>
+        </div>`
+        )
+        .join("")
+    : '<p class="py-3 text-xs text-slate-400">No agent turns recorded.</p>';
+
+  const tools = (data.by_tool || []).slice(0, 10);
+  const maxCalls = Math.max(...tools.map((x) => x.calls), 0) || 1;
+  document.getElementById("usage-tools").innerHTML = tools.length
+    ? tools
+        .map(
+          (x) => `
+        <div class="dash-item flex items-center gap-2.5 rounded-lg px-2 py-2" data-item='${escapeHTML(JSON.stringify({ kind: "kpi", title: `tool ${x.name}`, value: `${x.calls} calls` }))}'>
+          <span class="shrink-0 rounded-md px-1.5 py-0.5 text-[9px] font-bold uppercase ${x.is_write ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"}">${x.is_write ? "write" : "read"}</span>
+          <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-600">${escapeHTML(x.name)}</span>
+          <div class="hidden h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-slate-100 sm:block">
+            <div class="h-full rounded-full bg-indigo-400" style="width:${(x.calls / maxCalls) * 100}%"></div>
+          </div>
+          ${x.errors ? `<span class="shrink-0 rounded-full bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">${x.errors} err</span>` : ""}
+          <span class="w-6 shrink-0 text-right text-xs font-semibold text-slate-600">${x.calls}</span>
+        </div>`
+        )
+        .join("")
+    : '<p class="py-3 text-xs text-slate-400">No tool calls recorded.</p>';
+
+  const outcomes = data.ledger_outcomes || {};
+  document.getElementById("usage-outcomes").innerHTML = Object.entries(outcomes)
+    .map(([key, count]) => {
+      const label = key.replace(/_/g, " ");
+      return `
+        <div class="dash-item rounded-xl border border-slate-200 bg-slate-50 p-3" data-item='${escapeHTML(JSON.stringify({ kind: "kpi", title: label, value: count }))}'>
+          <p class="text-lg font-semibold text-slate-800">${count}</p>
+          <p class="mt-0.5 text-[10px] font-medium capitalize text-slate-400">${escapeHTML(label)}</p>
+        </div>`;
+    })
+    .join("");
+}
+
 // ==== Reports ====
 const reportPreviewWrap = document.getElementById("report-preview-wrap");
 const reportPreviewEl = document.getElementById("report-preview");
@@ -1387,9 +1522,33 @@ document.querySelectorAll(".report-gen").forEach((btn) => {
   });
 });
 
+const usageReportWindowEl = document.getElementById("usage-report-window");
+document.querySelectorAll(".usage-gen").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Generating…";
+    await generateUsageReport(btn.dataset.format, Number(usageReportWindowEl.value || 30));
+    btn.disabled = false;
+    btn.textContent = original;
+  });
+});
+
 async function generateReport(format) {
+  return fetchReport(`/api/reports/generate?format=${encodeURIComponent(format)}`, format, "vulngent-report");
+}
+
+async function generateUsageReport(format, windowDays) {
+  return fetchReport(
+    `/api/reports/usage?format=${encodeURIComponent(format)}&window_days=${windowDays ?? 30}`,
+    format,
+    "vulngent-agent-usage"
+  );
+}
+
+async function fetchReport(url, format, fallbackName) {
   try {
-    const res = await fetch(`/api/reports/generate?format=${encodeURIComponent(format)}`);
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     if (format === "md" || format === "markdown" || format === "txt") {
       reportPreviewEl.textContent = await res.text();
@@ -1401,14 +1560,14 @@ async function generateReport(format) {
     const blob = await res.blob();
     const disposition = res.headers.get("Content-Disposition") || "";
     const match = disposition.match(/filename="?([^";]+)"?/);
-    const url = URL.createObjectURL(blob);
+    const objectUrl = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = (match && match[1]) || `vulngent-report.${format}`;
+    a.href = objectUrl;
+    a.download = (match && match[1]) || `${fallbackName}.${format}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    URL.revokeObjectURL(objectUrl);
   } catch (err) {
     renderSystemMessage(`Failed to generate the ${format.toUpperCase()} report.`);
   }

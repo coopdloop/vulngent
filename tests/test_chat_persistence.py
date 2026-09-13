@@ -159,3 +159,31 @@ def test_archive_and_delete_endpoints(chat_db):
     with chat_db() as s:
         assert s.get(ChatThread, session.session_id) is None
         assert s.execute(select(ChatMessage).where(ChatMessage.thread_id == session.session_id)).scalars().all() == []
+
+
+def test_usage_endpoint_reflects_persisted_turns(chat_db):
+    from fastapi.testclient import TestClient
+
+    session = server.ChatSession()
+    session.persist_assistant_entry(
+        {
+            "role": "assistant",
+            "message": "done",
+            "tool_calls": [{"name": "send_slack_update", "is_error": False}],
+            "usage": {"input_tokens": 1000, "output_tokens": 500, "model": "anthropic/claude-sonnet-4.5"},
+            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+    )
+
+    with TestClient(server.app) as client:
+        payload = client.get("/api/usage?window_days=30").json()
+        assert payload["totals"]["turns"] == 1
+        assert payload["totals"]["input_tokens"] == 1000
+        assert payload["value"]["actions_automated"] == 1
+
+        md = client.get("/api/reports/usage?format=md")
+        assert md.status_code == 200
+        assert "Agent Usage & Value" in md.text
+
+        bad = client.get("/api/reports/usage?format=xls")
+        assert bad.status_code == 400

@@ -31,6 +31,12 @@ stakeholders, and keep the ledger current on its own.
 - **Tools:** `vulngent/agents/tools.py` — plain typed Python functions wrapping the
   repository + integrations, handed to the agents as-is (AutoGen builds the tool schema
   from type hints + docstring).
+- **Reporting & analytics:** `report_data.py` (ledger snapshot) and `usage_data.py`
+  (agent usage, spend, and modelled value) each build a plain dataclass snapshot that
+  `reporting.py` renders to markdown/PDF/DOCX, so the web dashboard, the API, and the
+  exports all read the same numbers. Usage/cost is derived from token counts already
+  persisted per assistant turn; "value" is analyst time displaced, priced with the
+  `AGENT_*` settings (Settings → Agent economics).
 
 ## Setup
 
@@ -50,6 +56,10 @@ uv run vulngent import sample_data/sample_vulns.json
 uv run vulngent list --status open
 uv run vulngent show 1
 uv run vulngent report
+
+# Agent usage, cost and value (also on the Dashboard + Reports pages in the web UI)
+uv run vulngent usage-report --days 30
+uv run vulngent usage-report --format pdf --output agent-usage.pdf
 
 # Point vulns at a GitHub repo (accepts 'owner/repo' or a github.com/git URL)
 uv run vulngent import sample_data/sample_vulns.json --repo https://github.com/you/your-repo

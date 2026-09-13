@@ -33,7 +33,8 @@ from vulngent.db import repository as repo
 from vulngent.db.models import Asset, ChatMention, ChatMessage, ChatThread, User, Vulnerability, VulnStatus
 from vulngent.db.session import ensure_schema, get_session
 from vulngent.report_data import collect_report_data
-from vulngent.reporting import SUPPORTED_FORMATS, render_report
+from vulngent.reporting import SUPPORTED_FORMATS, render_report, render_usage_report
+from vulngent.usage_data import collect_usage_data, usage_payload
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 INDEX_HTML = STATIC_DIR / "index.html"
@@ -243,6 +244,17 @@ def _collect_dashboard() -> dict[str, Any]:
         }
 
 
+@app.get("/api/usage")
+async def usage(window_days: int = 30) -> dict[str, Any]:
+    """High-level agent usage, spend, and modelled value. window_days=0 means all time."""
+    return await asyncio.to_thread(_collect_usage, window_days)
+
+
+def _collect_usage(window_days: int) -> dict[str, Any]:
+    with get_session() as session:
+        return usage_payload(collect_usage_data(session, window_days=window_days or None))
+
+
 @app.get("/api/ui/actions")
 async def action_context() -> dict[str, Any]:
     """Capabilities of hover-menu actions + repo mapping for contextual GitHub actions."""
@@ -288,6 +300,28 @@ async def generate_report(format: str = "md") -> Response:
     if fmt in ("md", "markdown", "txt"):
         return PlainTextResponse(str(rendered), media_type="text/markdown")
     filename = f"vulngent-report-{data.generated_at:%Y%m%d}.{fmt}"
+    return Response(
+        content=bytes(rendered),
+        media_type=_REPORT_MEDIA_TYPES[fmt],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/reports/usage")
+async def generate_usage_report(format: str = "md", window_days: int = 30) -> Response:
+    fmt = format.lower().strip()
+    if fmt not in SUPPORTED_FORMATS:
+        raise HTTPException(status_code=400, detail=f"Unsupported report format '{format}'.")
+
+    def _render() -> tuple[Any, Any]:
+        with get_session() as session:
+            data = collect_usage_data(session, window_days=window_days or None)
+        return data, render_usage_report(data, fmt)
+
+    data, rendered = await asyncio.to_thread(_render)
+    if fmt in ("md", "markdown", "txt"):
+        return PlainTextResponse(str(rendered), media_type="text/markdown")
+    filename = f"vulngent-agent-usage-{data.generated_at:%Y%m%d}.{fmt}"
     return Response(
         content=bytes(rendered),
         media_type=_REPORT_MEDIA_TYPES[fmt],

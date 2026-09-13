@@ -8,6 +8,7 @@ from Settings (REPORT_* env vars) via ReportData.branding.
 from __future__ import annotations
 
 from vulngent.report_data import ReportData
+from vulngent.usage_data import UsageReportData
 
 SUPPORTED_FORMATS = ("md", "markdown", "txt", "pdf", "docx")
 
@@ -87,6 +88,83 @@ def render_report(data: ReportData, fmt: str) -> str | bytes:
         return _to_pdf(data)
     if fmt == "docx":
         return _to_docx(data)
+    raise ValueError(f"Unsupported report format '{fmt}'. Must be one of {SUPPORTED_FORMATS}.")
+
+
+def _fmt_usd(value: float) -> str:
+    """Agent spend is often sub-cent; don't round a real number down to $0.00."""
+    if value and abs(value) < 0.01:
+        return f"${value:.4f}"
+    return f"${value:,.2f}"
+
+
+def _fmt_tokens(value: int) -> str:
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}k"
+    return str(value)
+
+
+def render_usage_markdown(data: UsageReportData) -> str:
+    v = data.value
+    lines = [f"# {data.branding.company_name} — Agent Usage & Value", ""]
+    lines.append(f"Window: {data.window_label} · Generated {data.generated_at:%Y-%m-%d %H:%M UTC}")
+    lines.append("")
+    lines.append("## Usage")
+    lines.append(f"- Agent turns: {data.turns} across {data.sessions} sessions")
+    lines.append(f"- Tokens: {data.input_tokens:,} in / {data.output_tokens:,} out ({data.total_tokens:,} total)")
+    lines.append(f"- Tool calls: {data.tool_calls} ({data.tool_errors} errored)")
+    lines.append(f"- Agent spend: {_fmt_usd(data.cost_usd)} ({_fmt_usd(data.cost_per_turn)}/turn)")
+    lines.append("")
+    lines.append("## Cost vs value")
+    lines.append(f"- Actions automated: {v.actions_automated}")
+    lines.append(f"- Questions answered: {v.questions_answered}")
+    lines.append(f"- Analyst hours saved: {v.analyst_hours_saved:.1f} @ {_fmt_usd(v.analyst_hourly_rate)}/hr")
+    lines.append(f"- Labor value: {_fmt_usd(v.labor_value_usd)}")
+    lines.append(f"- Agent cost: {_fmt_usd(v.agent_cost_usd)}")
+    lines.append(f"- Net value: {_fmt_usd(v.net_value_usd)}")
+    roi = f"{v.roi_multiple:.1f}x" if v.roi_multiple is not None else "n/a"
+    lines.append(f"- ROI: {roi}")
+    lines.append("")
+    lines.append("## By model")
+    if not data.by_model:
+        lines.append("- No recorded agent turns in this window.")
+    for m in data.by_model:
+        lines.append(
+            f"- {m.model}: {m.turns} turns, {m.total_tokens:,} tokens, {_fmt_usd(m.cost_usd)}"
+        )
+    lines.append("")
+    lines.append("## Top tools")
+    if not data.by_tool:
+        lines.append("- No tool calls in this window.")
+    for t in data.by_tool[:15]:
+        kind = "write" if t.is_write else "read"
+        lines.append(f"- {t.name} ({kind}): {t.calls} calls, {t.errors} errors")
+    lines.append("")
+    lines.append("## Ledger outcomes")
+    for key, count in data.ledger_outcomes.items():
+        lines.append(f"- {key.replace('_', ' ')}: {count}")
+    lines.append("")
+    lines.append(
+        "Assumptions: "
+        f"${data.pricing['input_per_mtok']}/M input tokens, "
+        f"${data.pricing['output_per_mtok']}/M output tokens, "
+        f"{data.pricing['minutes_per_action']}min saved per automated action, "
+        f"{data.pricing['minutes_per_answer']}min per answered question."
+    )
+    return "\n".join(lines)
+
+
+def render_usage_report(data: UsageReportData, fmt: str) -> str | bytes:
+    """Render a usage/value snapshot into `fmt`. str for md/markdown/txt, bytes otherwise."""
+    fmt = fmt.lower()
+    if fmt in ("md", "markdown", "txt"):
+        return render_usage_markdown(data)
+    if fmt == "pdf":
+        return _UsagePDF(data).render()
+    if fmt == "docx":
+        return _usage_to_docx(data)
     raise ValueError(f"Unsupported report format '{fmt}'. Must be one of {SUPPORTED_FORMATS}.")
 
 
@@ -389,6 +467,197 @@ def _to_pdf(data: ReportData) -> bytes:
     return _ReportPDF(data).render()
 
 
+class _UsagePDF(_ReportPDF):
+    """Agent usage/value export. Reuses the branded chrome (header, footer, headings,
+    KPI cards) from _ReportPDF; only the page content differs."""
+
+    def _cover_page(self) -> None:
+        pdf = self.pdf
+        pdf.add_page()
+        if self.b.logo_path:
+            try:
+                pdf.image(self.b.logo_path, x=self.MARGIN, y=20, h=14)
+            except Exception:
+                pass
+
+        pdf.set_xy(self.MARGIN, 55)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(self.b.accent_color)
+        pdf.cell(0, 6, _pdf_safe(self.b.company_name.upper()), new_x=self.XPos.LMARGIN, new_y=self.YPos.NEXT)
+
+        pdf.set_xy(self.MARGIN, 64)
+        pdf.set_font("Helvetica", "B", 28)
+        pdf.set_text_color(self.b.primary_color)
+        pdf.multi_cell(self._content_w, 11, _pdf_safe("Agent Usage & Value"))
+
+        pdf.set_x(self.MARGIN)
+        pdf.set_font("Helvetica", "", 11)
+        pdf.set_text_color(MUTED)
+        pdf.cell(
+            0,
+            6,
+            f"{self.data.window_label.capitalize()} - generated {self.data.generated_at:%Y-%m-%d %H:%M UTC}",
+            new_x=self.XPos.LMARGIN,
+            new_y=self.YPos.NEXT,
+        )
+        self._usage_cards(y=100)
+        self._value_panel(y=140)
+
+    def _usage_cards(self, *, y: float) -> None:
+        d = self.data
+        cards = [
+            (str(d.turns), "Agent turns", INK),
+            (str(d.sessions), "Sessions", INK),
+            (_fmt_tokens(d.total_tokens), "Tokens", self.b.accent_color),
+            (str(d.tool_calls), "Tool calls", INK),
+            (_fmt_usd(d.cost_usd), "Spend", SEVERITY_COLORS["high"]),
+        ]
+        self._cards(cards, y=y)
+
+    def _cards(self, cards: list[tuple[str, str, str]], *, y: float) -> None:
+        pdf = self.pdf
+        gap = 6
+        card_w = (self._content_w - gap * (len(cards) - 1)) / len(cards)
+        card_h = 28
+        for i, (num, label, color) in enumerate(cards):
+            x = self.MARGIN + i * (card_w + gap)
+            pdf.set_draw_color(HAIRLINE)
+            pdf.set_fill_color(PANEL_BG)
+            pdf.rect(x, y, card_w, card_h, style="FD", round_corners=True, corner_radius=2)
+            pdf.set_xy(x, y + 5)
+            pdf.set_font("Helvetica", "B", 16)
+            pdf.set_text_color(color)
+            pdf.cell(card_w, 10, _pdf_safe(num), align="C", new_x=self.XPos.LEFT, new_y=self.YPos.TOP)
+            pdf.set_xy(x, y + 17)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_text_color(MUTED)
+            pdf.cell(card_w, 5, _pdf_safe(label), align="C")
+
+    def _value_panel(self, *, y: float) -> None:
+        v = self.data.value
+        roi = f"{v.roi_multiple:.1f}x" if v.roi_multiple is not None else "n/a"
+        pdf = self.pdf
+        pdf.set_xy(self.MARGIN, y)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(MUTED)
+        pdf.cell(0, 5, "COST VS VALUE", new_x=self.XPos.LMARGIN, new_y=self.YPos.NEXT)
+        self._cards(
+            [
+                (_fmt_usd(v.agent_cost_usd), "Agent cost", INK),
+                (f"{v.analyst_hours_saved:.1f}h", "Analyst time saved", self.b.accent_color),
+                (_fmt_usd(v.labor_value_usd), "Labor value", SEVERITY_COLORS["low"]),
+                (_fmt_usd(v.net_value_usd), "Net value", SEVERITY_COLORS["low"]),
+                (roi, "ROI", self.b.primary_color),
+            ],
+            y=y + 9,
+        )
+        pdf.set_xy(self.MARGIN, y + 44)
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(MUTED)
+        p = self.data.pricing
+        pdf.multi_cell(
+            self._content_w,
+            4,
+            _pdf_safe(
+                f"Assumptions: ${p['input_per_mtok']}/M input tokens, ${p['output_per_mtok']}/M output tokens, "
+                f"${p['analyst_hourly_rate']}/hr analyst, {p['minutes_per_action']} min saved per automated action, "
+                f"{p['minutes_per_answer']} min per answered question."
+            ),
+        )
+
+    def _model_table(self) -> None:
+        pdf = self.pdf
+        self._heading("Usage by Model")
+        if not self.data.by_model:
+            pdf.set_font("Helvetica", "", 10)
+            pdf.set_text_color(MUTED)
+            pdf.multi_cell(0, 6, "No recorded agent turns in this window.")
+            return
+        from fpdf.fonts import FontFace
+
+        header_style = FontFace(color="#FFFFFF", fill_color=self.b.primary_color, emphasis="B")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_fill_color(255, 255, 255)
+        with pdf.table(
+            col_widths=(64, 18, 25, 25, 22),
+            text_align=("LEFT", "CENTER", "RIGHT", "RIGHT", "RIGHT"),
+            borders_layout="HORIZONTAL_LINES",
+            cell_fill_mode="ROWS",
+            cell_fill_color=PANEL_BG,
+            headings_style=header_style,
+            line_height=5,
+            padding=(1.6, 2, 1.6, 2),
+        ) as table:
+            row = table.row()
+            for h in ("Model", "Turns", "Input", "Output", "Cost"):
+                row.cell(h)
+            for m in self.data.by_model:
+                row = table.row()
+                row.cell(_pdf_safe(m.model))
+                row.cell(str(m.turns))
+                row.cell(_fmt_tokens(m.input_tokens))
+                row.cell(_fmt_tokens(m.output_tokens))
+                row.cell(_fmt_usd(m.cost_usd))
+
+    def _tool_table(self) -> None:
+        pdf = self.pdf
+        tools = self.data.by_tool[:15]
+        self._heading("Top Tools")
+        if not tools:
+            pdf.set_font("Helvetica", "", 10)
+            pdf.set_text_color(MUTED)
+            pdf.multi_cell(0, 6, "No tool calls in this window.")
+            return
+        from fpdf.fonts import FontFace
+
+        header_style = FontFace(color="#FFFFFF", fill_color=self.b.primary_color, emphasis="B")
+        error_style = FontFace(color=OVERDUE_COLOR, emphasis="B")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_fill_color(255, 255, 255)
+        with pdf.table(
+            col_widths=(84, 22, 22, 26),
+            text_align=("LEFT", "CENTER", "CENTER", "CENTER"),
+            borders_layout="HORIZONTAL_LINES",
+            cell_fill_mode="ROWS",
+            cell_fill_color=PANEL_BG,
+            headings_style=header_style,
+            line_height=5,
+            padding=(1.6, 2, 1.6, 2),
+        ) as table:
+            row = table.row()
+            for h in ("Tool", "Kind", "Calls", "Errors"):
+                row.cell(h)
+            for t in tools:
+                row = table.row()
+                row.cell(_pdf_safe(t.name))
+                row.cell("write" if t.is_write else "read")
+                row.cell(str(t.calls))
+                row.cell(str(t.errors), style=error_style if t.errors else None)
+
+    def _outcomes_section(self) -> None:
+        pdf = self.pdf
+        self._heading("Ledger Outcomes")
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(INK)
+        for key, count in self.data.ledger_outcomes.items():
+            self._reset_x()
+            pdf.cell(
+                0,
+                6,
+                _pdf_safe(f"- {key.replace('_', ' ').capitalize()}: {count}"),
+                new_x=self.XPos.LMARGIN,
+                new_y=self.YPos.NEXT,
+            )
+
+    def render(self) -> bytes:
+        self._cover_page()
+        self.pdf.add_page()
+        self._model_table()
+        self._tool_table()
+        self._outcomes_section()
+        return bytes(self.pdf.output())
+
+
 # --- DOCX ---------------------------------------------------------------------------
 
 
@@ -545,6 +814,134 @@ def _to_docx(data: ReportData) -> bytes:
 
     footer_p = doc.add_paragraph()
     run = footer_p.add_run(b.footer_text)
+    run.italic = True
+    run.font.size = Pt(8)
+    run.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def _usage_to_docx(data: UsageReportData) -> bytes:
+    import io
+
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Pt, RGBColor
+
+    b = data.branding
+    v = data.value
+
+    def _rgb(hexcolor: str) -> RGBColor:
+        h = hexcolor.lstrip("#")
+        return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+    doc = Document()
+    style = doc.styles["Normal"]
+    style.font.name = "Calibri"
+    style.font.size = Pt(10.5)
+
+    if b.logo_path:
+        try:
+            doc.add_picture(b.logo_path, height=Pt(36))
+        except Exception:
+            pass
+
+    eyebrow = doc.add_paragraph()
+    run = eyebrow.add_run(b.company_name.upper())
+    run.bold = True
+    run.font.size = Pt(10)
+    run.font.color.rgb = _rgb(b.accent_color)
+
+    title = doc.add_paragraph()
+    run = title.add_run("Agent Usage & Value")
+    run.bold = True
+    run.font.size = Pt(24)
+    run.font.color.rgb = _rgb(b.primary_color)
+
+    meta = doc.add_paragraph()
+    run = meta.add_run(f"{data.window_label.capitalize()} — generated {data.generated_at:%Y-%m-%d %H:%M UTC}")
+    run.font.size = Pt(10)
+    run.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
+
+    doc.add_heading("Usage", level=2)
+    for line in (
+        f"Agent turns: {data.turns} across {data.sessions} sessions",
+        f"Tokens: {data.input_tokens:,} in / {data.output_tokens:,} out ({data.total_tokens:,} total)",
+        f"Tool calls: {data.tool_calls} ({data.tool_errors} errored)",
+        f"Agent spend: {_fmt_usd(data.cost_usd)} ({_fmt_usd(data.cost_per_turn)} per turn)",
+    ):
+        doc.add_paragraph(line, style="List Bullet")
+
+    doc.add_heading("Cost vs value", level=2)
+    roi = f"{v.roi_multiple:.1f}x" if v.roi_multiple is not None else "n/a"
+    value_table = doc.add_table(rows=1, cols=5)
+    value_table.style = "Light Grid Accent 1"
+    hdr = value_table.rows[0].cells
+    for i, h in enumerate(("Agent cost", "Analyst time saved", "Labor value", "Net value", "ROI")):
+        hdr[i].text = h
+    cells = value_table.add_row().cells
+    for i, text in enumerate(
+        (
+            _fmt_usd(v.agent_cost_usd),
+            f"{v.analyst_hours_saved:.1f}h",
+            _fmt_usd(v.labor_value_usd),
+            _fmt_usd(v.net_value_usd),
+            roi,
+        )
+    ):
+        cells[i].text = text
+        cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph(
+        f"Based on {v.actions_automated} automated actions and {v.questions_answered} answered questions "
+        f"at {_fmt_usd(v.analyst_hourly_rate)}/hr."
+    )
+
+    doc.add_heading("Usage by model", level=2)
+    if not data.by_model:
+        doc.add_paragraph("No recorded agent turns in this window.")
+    else:
+        table = doc.add_table(rows=1, cols=5)
+        table.style = "Light Grid Accent 1"
+        hdr = table.rows[0].cells
+        for i, h in enumerate(("Model", "Turns", "Input", "Output", "Cost")):
+            hdr[i].text = h
+        for m in data.by_model:
+            cells = table.add_row().cells
+            cells[0].text = m.model
+            cells[1].text = str(m.turns)
+            cells[2].text = f"{m.input_tokens:,}"
+            cells[3].text = f"{m.output_tokens:,}"
+            cells[4].text = _fmt_usd(m.cost_usd)
+
+    doc.add_heading("Top tools", level=2)
+    if not data.by_tool:
+        doc.add_paragraph("No tool calls in this window.")
+    else:
+        table = doc.add_table(rows=1, cols=4)
+        table.style = "Light Grid Accent 1"
+        hdr = table.rows[0].cells
+        for i, h in enumerate(("Tool", "Kind", "Calls", "Errors")):
+            hdr[i].text = h
+        for t in data.by_tool[:15]:
+            cells = table.add_row().cells
+            cells[0].text = t.name
+            cells[1].text = "write" if t.is_write else "read"
+            cells[2].text = str(t.calls)
+            cells[3].text = str(t.errors)
+
+    doc.add_heading("Ledger outcomes", level=2)
+    for key, count in data.ledger_outcomes.items():
+        doc.add_paragraph(f"{key.replace('_', ' ').capitalize()}: {count}", style="List Bullet")
+
+    p = data.pricing
+    footer_p = doc.add_paragraph()
+    run = footer_p.add_run(
+        f"{b.footer_text} · Assumptions: ${p['input_per_mtok']}/M input tokens, "
+        f"${p['output_per_mtok']}/M output tokens, {p['minutes_per_action']} min per automated action, "
+        f"{p['minutes_per_answer']} min per answered question."
+    )
     run.italic = True
     run.font.size = Pt(8)
     run.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)

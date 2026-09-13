@@ -115,6 +115,18 @@ SETTINGS_GROUPS: list[dict[str, Any]] = [
             {"key": "REPORT_FOOTER_TEXT", "label": "Footer text"},
         ],
     },
+    {
+        "id": "economics",
+        "title": "Agent economics",
+        "description": "Pricing and time-savings assumptions behind the Agent usage & value dashboard/report.",
+        "fields": [
+            {"key": "AGENT_COST_INPUT_PER_MTOK", "label": "Input $ / 1M tokens", "type": "number", "hint": "Your model's prompt price"},
+            {"key": "AGENT_COST_OUTPUT_PER_MTOK", "label": "Output $ / 1M tokens", "type": "number", "hint": "Your model's completion price"},
+            {"key": "AGENT_ANALYST_HOURLY_RATE", "label": "Analyst $ / hour", "type": "number", "hint": "Fully-loaded cost of the human this replaces"},
+            {"key": "AGENT_MINUTES_PER_ACTION", "label": "Minutes per automated action", "type": "number", "hint": "Analyst time a ledger write would have taken"},
+            {"key": "AGENT_MINUTES_PER_ANSWER", "label": "Minutes per answered question", "type": "number", "hint": "Analyst time to research + write an answer"},
+        ],
+    },
 ]
 
 _FIELD_TO_ATTR = {f["key"]: f["key"].lower() for g in SETTINGS_GROUPS for f in g["fields"]}
