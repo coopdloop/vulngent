@@ -21,6 +21,36 @@ const usageInEl = document.getElementById("usage-in");
 const usageOutEl = document.getElementById("usage-out");
 const viewTitleEl = document.getElementById("view-title");
 const viewSubtitleEl = document.getElementById("view-subtitle");
+const themeToggleBtn = document.getElementById("theme-toggle");
+
+// ==== Theme (dark mode) ====
+// The .dark class itself is applied by an inline script in index.html before
+// first paint; here we only sync the toggle icons and handle switching.
+const THEME_KEY = "vulngent.theme";
+const osThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+function currentTheme() {
+  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+}
+
+function applyTheme(theme, persist = true) {
+  document.documentElement.classList.toggle("dark", theme === "dark");
+  if (persist) localStorage.setItem(THEME_KEY, theme);
+  if (themeToggleBtn) {
+    themeToggleBtn.querySelector(".theme-icon-moon").classList.toggle("hidden", theme === "dark");
+    themeToggleBtn.querySelector(".theme-icon-sun").classList.toggle("hidden", theme !== "dark");
+    themeToggleBtn.title = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+  }
+}
+
+applyTheme(currentTheme(), false);
+themeToggleBtn?.addEventListener("click", () =>
+  applyTheme(currentTheme() === "dark" ? "light" : "dark"),
+);
+// Follow OS changes only while the user hasn't picked a theme explicitly.
+osThemeQuery.addEventListener("change", (e) => {
+  if (!localStorage.getItem(THEME_KEY)) applyTheme(e.matches ? "dark" : "light", false);
+});
 
 let socket = null;
 let reconnectTimer = null;
@@ -856,7 +886,7 @@ function buildToolChip(call, idx, entry) {
   chip.dataset.wireIndex = String(idx);
   chip.style.color = color;
   chip.style.borderColor = color;
-  chip.style.background = `color-mix(in srgb, ${color} 10%, white)`;
+  chip.style.background = `color-mix(in srgb, ${color} 12%, transparent)`;
   const argPreview = shortArgPreview(call);
   chip.title = `${call.name}\n${argPreview ? argPreview + `\n` : ""}#${idx + 1} · ${call.result || ""}`.slice(0, 300);
   const dot = document.createElement("span");
