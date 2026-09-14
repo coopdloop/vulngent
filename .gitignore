@@ -13,3 +13,6 @@ wheels/
 .env
 *.db
 
+# Local pi agent session state (background task logs/metadata)
+.pi/
+
